@@ -84,7 +84,7 @@ class ChunkRecorder:
         rec.stop()        # stop and flush remainder
         chunks = rec.chunks  # list of np.ndarrays (float32, mono)
     """
-    def __init__(self, sr=16000, channels=1, chunk_size_sec=2.0, blocksize=0):
+    def __init__(self, sr=16000, channels=1, chunk_size_sec=2.0, blocksize=0, on_chunk=None):
         self.sr = sr
         self.channels = channels
         self.chunk_size_sec = float(chunk_size_sec)
@@ -100,6 +100,7 @@ class ChunkRecorder:
         self._buf = np.empty((0,), dtype=np.float32)  # mono buffer
         self.chunks = []  # public: filled during/after recording
         self.blocksize = blocksize  # 0 lets PortAudio choose
+        self.on_chunk = on_chunk
 
     def _callback(self, indata, frames, time_info, status):
         if status:
@@ -125,6 +126,8 @@ class ChunkRecorder:
                 chunk = self._buf[:self.chunk_samples].copy()
                 self.chunks.append(chunk)
                 self._buf = self._buf[self.chunk_samples:]
+                if self.on_chunk:
+                    self.on_chunk(chunk)  # infer
 
         # flush remainder (if any) as final shorter chunk
         if len(self._buf) > 0:
@@ -170,7 +173,7 @@ class ChunkRecorder:
 # -------------------------------
 import tkinter as tk
 from tkinter import messagebox
-
+from realtime_solo import RealTimeSolo
 class RecordButton:
     def __init__(self, master, sr=16000, channels=1, chunk_size_sec=2.0):
         self.master = master
@@ -192,11 +195,14 @@ class RecordButton:
         self.chk = tk.Checkbutton(master, text="Save chunks as WAV on stop", variable=self.save_var)
         self.chk.pack()
 
+        self.solo = RealTimeSolo("config.yaml")
+        self.solo.start_session()
+
     def toggle(self):
         if not self.is_recording:
             # Start
             try:
-                self.recorder = ChunkRecorder(sr=self.sr, channels=self.channels, chunk_size_sec=self.chunk_size_sec)
+                self.recorder = ChunkRecorder(sr=self.sr, channels=self.channels, chunk_size_sec=self.chunk_size_sec, on_chunk=self.handle_chunk)
                 self.recorder.start()
                 self.is_recording = True
                 self.btn.config(text="Stop")
@@ -223,6 +229,8 @@ class RecordButton:
 
                 messagebox.showinfo("Done", f"Recorded {len(chunks)} chunks.\nCheck console for details.")
 
+    def handle_chunk(self, chunk):
+        self.solo.process_chunk(chunk, chunk_sr=16000)
 
 def run_record_button_ui(sr=16000, channels=1, chunk_size_sec=2.0):
     root = tk.Tk()

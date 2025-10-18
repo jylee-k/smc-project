@@ -1,0 +1,20 @@
+stream:
+  sample_rate: 16000          # 统一 16k 采样
+  chunk_ms: 1000               # 采集/发送粒度：200 ms
+  out_jsonl: "runs/stream_preds.jsonl"
+  out_json: "runs/stream_preds_summary.json"
+
+fusion:
+  strategy: "weighted"        # "average" | "weighted"
+  weights:
+    local: 0.7                # 本地模型权重
+    aliyun: 0.3               # 云端阿里云权重
+
+aliyun:
+  appkey: "g3YsxMnvV5RNRdzn"
+  token:  "9e995fca93c04e458763fb1c38e61436"        # 有效期内的token
+  url:    "wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1"
+
+local_models:
+  - type: "pann"              # 使用PANNs的 SoundEventDetection 帧级输出（安装 panns-inference）
+    name: "pann_cnn14"
