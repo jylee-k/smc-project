@@ -21,10 +21,11 @@ st.set_page_config(
 )
 
 # --- Constants for Session State ---
+# Using constants prevents typos when accessing session state
 STATE_RUNNING = 'pipeline_running'
 STATE_THREAD = 'pipeline_thread'
 STATE_STOP_EVENT = 'stop_event'
-STATE_ALERTS = 'alerts'
+STATE_ACTIVE_ALERTS = 'active_alerts'
 STATE_ALERT_QUEUE = 'alert_queue'
 STATE_AUDIO_TO_PROCESS = 'audio_data_to_process'
 STATE_AUDIO_LEVEL = 'current_audio_level'
@@ -32,6 +33,7 @@ STATE_FILE_PROGRESS = 'file_progress'
 STATE_ALERT_HISTORY = 'alert_history'
 
 # --- Dataclasses for Queue Communication ---
+# Using dataclasses is safer and clearer than raw dicts
 @dataclass
 class ErrorMessage:
     text: str
@@ -44,24 +46,26 @@ class LevelMessage:
 class ProgressMessage:
     progress: float
 
-# Alert messages are dicts returned from solo.process_chunk()
+# The queue can hold any of our defined message types or a dict from the model
 QueueItem = ErrorMessage | LevelMessage | ProgressMessage | Dict[str, Any]
 
 
 # --- Best Practice: Centralized State Management ---
+
 def init_session_state() -> None:
     """Initializes all required keys in Streamlit's session state."""
     state_defaults = {
         STATE_RUNNING: False,
         STATE_THREAD: None,
         STATE_STOP_EVENT: None,
-        STATE_ALERTS: {},
+        STATE_ACTIVE_ALERTS: {},
         STATE_ALERT_QUEUE: queue.Queue(),
         STATE_AUDIO_TO_PROCESS: None,
         STATE_AUDIO_LEVEL: 0.0,
         STATE_FILE_PROGRESS: 0.0,
         STATE_ALERT_HISTORY: [],
     }
+    # Ensure all keys exist on first run
     for key, value in state_defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
@@ -89,17 +93,20 @@ def mic_pipeline(
     alert_queue: queue.Queue[QueueItem],
     model: RealTimeSolo
 ) -> None:
-    """Handles microphone recording and real-time processing."""
+    """
+    Handles microphone recording and real-time processing in a separate thread.
+    """
     try:
         model.start_session()
 
         def handle_chunk(chunk: np.ndarray) -> None:
-            # Calculate audio level (RMS) and put on queue
+            """Callback function for the ChunkRecorder."""
+            # Calculate and queue the audio level for the UI
             rms = np.sqrt(np.mean(chunk**2) + 1e-10)
             level = float(np.clip(rms * 10, 0, 1))
             alert_queue.put(LevelMessage(level=level))
 
-            # Process for alerts
+            # Process the chunk for events and queue the result
             result = model.process_chunk(chunk, chunk_sr=model.sr)
             if result:
                 alert_queue.put(result)
@@ -111,7 +118,7 @@ def mic_pipeline(
             on_chunk=handle_chunk
         )
         rec.start()
-        stop_event.wait()  # Wait until the stop event is set
+        stop_event.wait()  # Wait for the main thread to signal a stop
         rec.stop()
         model.stop_session()
 
@@ -125,11 +132,10 @@ def file_pipeline(
     audio_bytes: bytes,
     model: RealTimeSolo
 ) -> None:
-    """Handles audio file processing in a background thread."""
+    """Handles audio file processing in a separate thread."""
     try:
         model.start_session()
         try:
-            # Load audio data from in-memory bytes
             y, sr = librosa.load(io.BytesIO(audio_bytes), sr=model.sr, mono=True)
             total_samples = len(y)
         except Exception as e:
@@ -142,13 +148,13 @@ def file_pipeline(
         for i in range(0, total_samples, hop):
             if stop_event.is_set():
                 break
-                
+            
+            # Send progress updates to the UI
             progress_percent = (i / total_samples)
             alert_queue.put(ProgressMessage(progress=progress_percent))
             
             chunk = y[i:i + hop]
             if len(chunk) < hop:
-                # Pad the final chunk if it's too short
                 chunk = np.pad(chunk, (0, hop - len(chunk)))
             
             result = model.process_chunk(chunk, chunk_sr=model.sr)
@@ -173,7 +179,8 @@ def draw_control_panel(model: RealTimeSolo) -> None:
         col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
             if st.button("🎤 Start Recording", disabled=st.session_state[STATE_RUNNING]):
-                st.session_state[STATE_ALERTS].clear()
+                # Clear previous session data
+                st.session_state[STATE_ACTIVE_ALERTS].clear()
                 st.session_state[STATE_ALERT_HISTORY].clear()
                 
                 stop_event = threading.Event()
@@ -191,17 +198,19 @@ def draw_control_panel(model: RealTimeSolo) -> None:
 
         with col2:
             if st.button("❌ Stop Recording", disabled=not st.session_state[STATE_RUNNING]):
+                # Signal the thread to stop and update state
                 if st.session_state[STATE_STOP_EVENT]:
                     st.session_state[STATE_STOP_EVENT].set()
                 st.session_state[STATE_RUNNING] = False
                 st.session_state[STATE_AUDIO_LEVEL] = 0.0
-                st.rerun()
+                st.rerun() # Trigger the main loop's cleanup logic
 
         with col3:
             if st.button("🗑️ Clear All Alerts"):
-                st.session_state[STATE_ALERTS].clear()
+                # Clear all alerts without stopping the pipeline
+                st.session_state[STATE_ACTIVE_ALERTS].clear()
                 st.session_state[STATE_ALERT_HISTORY].clear()
-                st.rerun()
+                # No rerun needed; live_update will handle it
 
     else:  # Audio File mode
         file_col, run_col, reset_col = st.columns([2, 1, 1])
@@ -216,7 +225,7 @@ def draw_control_panel(model: RealTimeSolo) -> None:
         with run_col:
             can_process = (st.session_state[STATE_AUDIO_TO_PROCESS] is not None)
             if st.button("▶️ Process File", disabled=(not can_process or st.session_state[STATE_RUNNING])):
-                st.session_state[STATE_ALERTS].clear()
+                st.session_state[STATE_ACTIVE_ALERTS].clear()
                 st.session_state[STATE_ALERT_HISTORY].clear()
                 st.session_state[STATE_FILE_PROGRESS] = 0.0
                 
@@ -236,12 +245,13 @@ def draw_control_panel(model: RealTimeSolo) -> None:
 
         with reset_col:
             if st.button("🗑️ Clear All Alerts"):
-                st.session_state[STATE_ALERTS].clear()
+                st.session_state[STATE_ACTIVE_ALERTS].clear()
                 st.session_state[STATE_ALERT_HISTORY].clear()
-                st.rerun()
+                # No rerun needed; live_update will handle it
+                
 
 def process_alert_queue() -> None:
-    """Processes all items currently in the alert queue without blocking."""
+    """Drains and processes all items from the thread-safe queue."""
     while not st.session_state[STATE_ALERT_QUEUE].empty():
         item = st.session_state[STATE_ALERT_QUEUE].get_nowait()
         
@@ -255,35 +265,50 @@ def process_alert_queue() -> None:
         elif isinstance(item, ProgressMessage):
             st.session_state[STATE_FILE_PROGRESS] = item.progress
         
-        # This handles the alert dict
         elif isinstance(item, dict) and "message" in item:
+            # This is an alert from the model
             alert = item
-            alert_key = alert.get("YAMNet", {}).get("top_label", "Unknown Event")
+            alert_key = alert.get("PANN", {}).get("top_label", "Unknown Event")
+            tier = alert.get("tier", 1)
 
-            if alert_key in st.session_state[STATE_ALERTS]:
-                # Update existing alert
-                st.session_state[STATE_ALERTS][alert_key]['count'] += 1
-                st.session_state[STATE_ALERTS][alert_key]['alert_obj'] = alert
+            if alert_key in st.session_state[STATE_ACTIVE_ALERTS]:
+                # --- Logic for existing alerts ---
+                # Update the count, scores, and last-seen time
+                st.session_state[STATE_ACTIVE_ALERTS][alert_key]['count'] += 1
+                st.session_state[STATE_ACTIVE_ALERTS][alert_key]['alert_obj'] = alert
+                st.session_state[STATE_ACTIVE_ALERTS][alert_key]['last_seen'] = time.time()
             else:
-                # Create new alert
-                tier = alert.get("tier", 1)
-                if tier >= 2:
-                    icon = "🚨" if tier == 3 else "⚠️"
-                    st.toast(f"New Alert: {alert.get('message', '...')}", icon=icon)
+                # --- Logic for new alerts ---
+                # 1. Auto-archive any existing Tier 1 alerts
+                keys_to_archive = []
+                for key, data in st.session_state[STATE_ACTIVE_ALERTS].items():
+                    if data['alert_obj'].get("tier", 1) == 1:
+                        keys_to_archive.append(key)
                 
-                    if tier == 3:
-                        try:
-                            # Play sound for critical alerts
-                            st.audio("alert.wav", autoplay=True) 
-                        except Exception as e:
-                            print(f"Could not play alert.wav: {e}")
+                for key in keys_to_archive:
+                    old_alert_data = st.session_state[STATE_ACTIVE_ALERTS].pop(key)
+                    timestamp = datetime.datetime.fromtimestamp(old_alert_data['first_seen']).strftime("%I:%M:%S %p")
+                    old_alert_text = f"**{old_alert_data['alert_obj'].get('message', '...')}** (Detected {old_alert_data['count']} times)"
+                    
+                    st.session_state[STATE_ALERT_HISTORY].insert(0, {
+                        "text": old_alert_text,
+                        "timestamp": timestamp,
+                        "tier": 1
+                    })
 
-                st.session_state[STATE_ALERTS][alert_key] = {
+                # 2. Add the new alert (of any tier) to the active list
+                st.session_state[STATE_ACTIVE_ALERTS][alert_key] = {
                     'alert_obj': alert,
                     'count': 1,
                     'first_seen': time.time(),
+                    'last_seen': time.time(),
                     'id': str(uuid.uuid4())
                 }
+
+                # 3. Show a toast notification for new high-priority alerts
+                if tier >= 2:
+                    icon = "🚨" if tier == 3 else "⚠️"
+                    st.toast(f"New Alert: {alert.get('message', '...')}", icon=icon)
 
 def draw_status_bar() -> None:
     """Draws the main status bar (Running/Stopped) and progress bars."""
@@ -293,32 +318,33 @@ def draw_status_bar() -> None:
             if thread and thread.is_alive():
                 st.markdown("**(Status: 🟢 Running)**")
             else:
+                # The thread has finished, but state hasn't been cleaned up
                 st.session_state[STATE_RUNNING] = False
                 st.markdown("**(Status: 🏁 Finished)**")
         else:
             st.markdown("**(Status: 🔴 Stopped)**")
 
-        # Reset indicators if not running
+        # Clear progress bars if not running
         if not st.session_state[STATE_RUNNING]:
             st.session_state[STATE_FILE_PROGRESS] = 0.0
             st.session_state[STATE_AUDIO_LEVEL] = 0.0
 
-        # Show Live Audio Level for Microphone mode
         if st.session_state[STATE_AUDIO_LEVEL] > 0:
             st.progress(st.session_state[STATE_AUDIO_LEVEL], text="Live Audio Level")
 
-        # Show Progress Bar for File mode (only when running)
         if st.session_state[STATE_FILE_PROGRESS] > 0:
             st.progress(st.session_state[STATE_FILE_PROGRESS], text="File Processing Progress")
 
 def draw_active_alerts() -> None:
-    """Draws the list of currently active, un-acknowledged alerts."""
-    if not st.session_state[STATE_ALERTS]:
+    """Draws all unacknowledged alerts (Tier 1, 2, and 3)."""
+    
+    if not st.session_state[STATE_ACTIVE_ALERTS]:
         st.write("✅ No active alerts at the moment.")
         return
 
+    # Sort alerts by when they were first seen
     sorted_alerts = sorted(
-        st.session_state[STATE_ALERTS].items(),
+        st.session_state[STATE_ACTIVE_ALERTS].items(),
         key=lambda item: item[1]['first_seen'],
         reverse=True
     )
@@ -331,6 +357,9 @@ def draw_active_alerts() -> None:
             tier = alert.get("tier", 1)
             message = alert.get("message", "No message")
 
+            first_seen_str = datetime.datetime.fromtimestamp(alert_data['first_seen']).strftime("%I:%M:%S %p")
+            last_seen_str = datetime.datetime.fromtimestamp(alert_data['last_seen']).strftime("%I:%M:%S %p")
+            
             alert_text = f"**{message}**"
             if count > 1:
                 alert_text += f" (Detected {count} times)"
@@ -338,42 +367,80 @@ def draw_active_alerts() -> None:
             col1, col2 = st.columns([4, 1])
             
             with col1:
+                # Display color-coded alert based on tier
                 if tier >= 3:
                     st.error(alert_text, icon="🚨")
                 elif tier == 2:
                     st.warning(alert_text, icon="⚠️")
                 else:
                     st.info(alert_text, icon="ℹ️")
+                
+                st.caption(f"First seen: {first_seen_str}  |  Last seen: {last_seen_str}")
                         
-                with st.expander("See details"):
+                with st.expander("See details", expanded=True):
                     yamnet_label = alert.get("YAMNet", {}).get("top_label", "N/A")
                     yamnet_score = alert.get("YAMNet", {}).get("top_score", 0)
                     pann_label = alert.get("PANN", {}).get("top_label", "N/A")
                     pann_score = alert.get("PANN", {}).get("top_score", 0)
                     
                     st.markdown(f"""
-                    - **YAMNet Prediction:** `{yamnet_label}` (Score: `{yamnet_score*100:.1f}%`)
                     - **PANN Prediction:** `{pann_label}` (Score: `{pann_score*100:.1f}%`)
+                    - **YAMNet Prediction:** `{yamnet_label}` (Score: `{yamnet_score*100:.1f}%`)
                     """)
             
             with col2:
-                # Acknowledge button moves alert to history
-                if st.button("Acknowledge", key=alert_id):
-                    timestamp = datetime.datetime.now().strftime("%I:%M:%S %p")
-                    st.session_state[STATE_ALERT_HISTORY].insert(0, {
-                        "text": alert_text,
-                        "timestamp": timestamp,
-                        "tier": tier
-                    })
-                    del st.session_state[STATE_ALERTS][alert_key]
-                    st.rerun()
+                # Only show Acknowledge button for Tier 2+
+                if tier >= 2:
+                    if st.button("Acknowledge", key=alert_id):
+                        # Move this alert to the history
+                        timestamp = datetime.datetime.fromtimestamp(alert_data['first_seen']).strftime("%I:%M:%S %p")
+                        st.session_state[STATE_ALERT_HISTORY].insert(0, {
+                            "text": alert_text,
+                            "timestamp": timestamp,
+                            "tier": tier
+                        })
+                        # Remove it from the active list
+                        del st.session_state[STATE_ACTIVE_ALERTS][alert_key]
+                        # No rerun needed; live_update will handle it
 
-def draw_alert_history() -> None:
-    """Draws the expander holding all acknowledged alerts."""
-    if st.session_state[STATE_ALERT_HISTORY]:
+def draw_tiered_alert_history() -> None:
+    """Draws the acknowledged alert history, filtered into separate tiers."""
+    
+    if not st.session_state[STATE_ALERT_HISTORY]:
         st.markdown("---")
-        with st.expander("Acknowledged Alert History"):
-            for item in st.session_state[STATE_ALERT_HISTORY]:
+        st.write("✅ No acknowledged alerts in history.")
+        return
+
+    # Filter the single history list into three separate lists
+    all_history = st.session_state[STATE_ALERT_HISTORY]
+    tier3_history = [item for item in all_history if item.get("tier") == 3]
+    tier2_history = [item for item in all_history if item.get("tier") == 2]
+    tier1_history = [item for item in all_history if item.get("tier") == 1]
+
+    st.markdown("---")
+    
+    # Tier 3 History Box
+    with st.expander("Tier 3 Alert History", expanded=True):
+        if not tier3_history:
+            st.caption("No Tier 3 alerts in history.")
+        else:
+            for item in tier3_history:
+                st.markdown(f"*{item['timestamp']}* - {item['text']}")
+
+    # Tier 2 History Box
+    with st.expander("Tier 2 Alert History", expanded=True):
+        if not tier2_history:
+            st.caption("No Tier 2 alerts in history.")
+        else:
+            for item in tier2_history:
+                st.markdown(f"*{item['timestamp']}* - {item['text']}")
+    
+    # Tier 1 History Box
+    with st.expander("Tier 1 Alert History"):
+        if not tier1_history:
+            st.caption("No Tier 1 alerts in history.")
+        else:
+            for item in tier1_history:
                 st.markdown(f"*{item['timestamp']}* - {item['text']}")
 
 def run_live_update() -> None:
@@ -382,28 +449,49 @@ def run_live_update() -> None:
     to create the "live" polling effect for the UI.
     """
     if st.session_state[STATE_RUNNING]:
-        time.sleep(0.1)  # Poll every 100ms
+        # Refresh rate is 300ms. This is slower than the 200ms model chunk size,
+        # which prevents race conditions and stabilizes the UI.
+        time.sleep(0.5)
         st.rerun()
 
 # --- Main App Execution ---
 
 st.title("SilentSignals: Real-Time Event Based Alerts")
 
+# 1. Initialize session state
 init_session_state()
 solo_model = load_model()
 
 if solo_model:
-    # All main UI and logic functions are called here
-    draw_control_panel(solo_model)
+    # 2. Process any messages from the background thread
     process_alert_queue()
+
+    # 3. Draw the main controls
+    draw_control_panel(solo_model)
     draw_status_bar()
 
-    st.markdown("---")
-    st.subheader("Active Alerts:")
-    draw_active_alerts()
-    draw_alert_history()
+    # 4. Handle cleanup logic if "Stop" was just clicked
+    if not st.session_state[STATE_RUNNING] and st.session_state[STATE_THREAD] is not None:
+        with st.spinner("Stopping..."):
+            # Wait for the thread to fully exit
+            thread: Optional[threading.Thread] = st.session_state[STATE_THREAD]
+            if thread:
+                thread.join()
+            st.session_state[STATE_THREAD] = None
 
-    # This function must be called last
+            # Process any final messages left in the queue
+            process_alert_queue()
+            st.rerun() # Rerun one last time to draw the final "Stopped" state
+
+    # 5. Draw the main UI sections
+    st.markdown("---")
+    st.subheader("Current Alerts")
+    draw_active_alerts()
+    
+    st.subheader("Alert History")
+    draw_tiered_alert_history()
+    
+    # 6. Trigger the live update loop (if running)
     run_live_update()
 else:
     st.error("Model failed to load. The application cannot start.")

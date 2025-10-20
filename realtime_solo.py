@@ -151,11 +151,11 @@ class RealTimeSolo:
                 "top_index": yamnet_top_idx
             }
         }
-        label = yamnet_top_lbl.lower()
+        label = local_top_lbl.lower()
         if ("alarm" in label) or ("siren" in label) or ("gunshot" in label):
             row["tier"] = 3
             row["type"] = "Critical"
-            row["message"] = f"{yamnet_top_lbl} detected"
+            row["message"] = f"{local_top_lbl} detected"
         elif ("baby" in label and "cry" in label):
             row["tier"] = 2
             row["type"] = "Warning"
@@ -164,7 +164,7 @@ class RealTimeSolo:
             row["tier"] = 1
             row["type"] = "Info"
             # If the label is something generic like "Speech" or "Noise"
-            row["message"] = f"{yamnet_top_lbl} detected"
+            row["message"] = f"{local_top_lbl} detected"
         
         
         
