@@ -1,7 +1,0 @@
-{"time_start": 0.0, "time_end": 1.0, "PANN": {"top_label": "Alarm", "top_score": 0.5287, "top_index": 388}}
-{"time_start": 1.0, "time_end": 2.0, "PANN": {"top_label": "Alarm clock", "top_score": 0.526, "top_index": 395}}
-{"time_start": 2.0, "time_end": 3.0, "PANN": {"top_label": "Speech", "top_score": 0.5416, "top_index": 0}}
-{"time_start": 3.0, "time_end": 4.0, "PANN": {"top_label": "Speech", "top_score": 0.58, "top_index": 0}}
-{"time_start": 4.0, "time_end": 5.0, "PANN": {"top_label": "Speech", "top_score": 0.5667, "top_index": 0}}
-{"time_start": 5.0, "time_end": 6.0, "PANN": {"top_label": "Speech", "top_score": 0.5676, "top_index": 0}}
-{"time_start": 6.0, "time_end": 7.0, "PANN": {"top_label": "Speech", "top_score": 0.5364, "top_index": 0}}

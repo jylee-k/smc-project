@@ -63,11 +63,6 @@ sd.wait()
 save_audio(audio2, sr2)'''
 
 
-
-
-
-
-
 # --------------------------------------------
 # Real-time recorder that emits fixed chunks
 # --------------------------------------------
@@ -237,7 +232,8 @@ def run_record_button_ui(sr=16000, channels=1, chunk_size_sec=2.0):
     app = RecordButton(root, sr=sr, channels=channels, chunk_size_sec=chunk_size_sec)
     root.mainloop()
     
-# Launch minimal GUI (Start/Stop). Optional: check "Save chunks as WAV on stop".
-run_record_button_ui(sr=16000, channels=1, chunk_size_sec=2.0)
+if __name__ == "__main__":
+    # Launch minimal GUI (Start/Stop). Optional: check "Save chunks as WAV on stop".
+    run_record_button_ui(sr=16000, channels=1, chunk_size_sec=2.0)
 
 

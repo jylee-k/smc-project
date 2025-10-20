@@ -41,7 +41,7 @@ class LocalYAMNet:
         self.device = device if torch.cuda.is_available() and device.startswith("cuda") else "cpu"
         self.model = yamnet.yamnet(pretrained=True).eval().to(self.device)
         self.labels = None
-        yaml_path = './yamnet_category_meta.yaml'
+        yaml_path = './configs/yamnet_category_meta.yaml'
         with open(yaml_path, "r", encoding="utf-8") as f:
             meta = yaml.safe_load(f)
         class_names = [item["name"] for item in meta]
@@ -58,7 +58,7 @@ class LocalYAMNet:
         return probs
 
 class RealTimeSolo:
-    def __init__(self, cfg_path="configs/moe.yaml"):
+    def __init__(self, cfg_path="configs/config.yaml"):
         with open(cfg_path, "r",encoding='utf-8') as f:
             self.cfg = yaml.safe_load(f)
         st = self.cfg.get("stream", {})
@@ -67,10 +67,11 @@ class RealTimeSolo:
         self.out_jsonl = st.get("out_jsonl", "runs/stream_preds.jsonl")
         self.out_json  = st.get("out_json",  "runs/stream_summary.json")
         os.makedirs(os.path.dirname(self.out_jsonl) or ".", exist_ok=True)
+        self.device = 'cuda' if torch.cuda.is_available() else "cpu"
 
-        self.local = LocalPANN(device="cuda", min_seconds=1.0)
+        self.local = LocalPANN(device=self.device, min_seconds=1.0)
         self.class_list = getattr(self.local, "labels", None)
-        self.yamnet = LocalYAMNet(device="cuda")
+        self.yamnet = LocalYAMNet(device=self.device)
         self.yam_labels = self.yamnet.labels
         self.win_seconds = 1.0
         self.win_samples = int(self.sr * self.win_seconds)
@@ -82,16 +83,21 @@ class RealTimeSolo:
         self.fout = None
 
     def start_session(self):
-        if self.started: return
+        if self.started: 
+            return
         self.fout = open(self.out_jsonl, "a", encoding="utf-8")
         self.session_t0 = time.time()
         self.frame_idx = 0
+        self.win_buffer = np.zeros((0,), np.float32)  # reset buffer
         self.started = True
 
     def stop_session(self):
-        if not self.started: return
-        try: self.fout.close()
-        except: pass
+        if not self.started: 
+            return
+        try: 
+            self.fout.close()
+        except: 
+            pass
         summary = {
             "start_ts": self.session_t0,
             "stop_ts": time.time(),
@@ -145,6 +151,23 @@ class RealTimeSolo:
                 "top_index": yamnet_top_idx
             }
         }
+        label = yamnet_top_lbl.lower()
+        if ("alarm" in label) or ("siren" in label) or ("gunshot" in label):
+            row["tier"] = 3
+            row["type"] = "Critical"
+            row["message"] = f"{yamnet_top_lbl} detected"
+        elif ("baby" in label and "cry" in label):
+            row["tier"] = 2
+            row["type"] = "Warning"
+            row["message"] = "Baby crying detected"
+        else:
+            row["tier"] = 1
+            row["type"] = "Info"
+            # If the label is something generic like "Speech" or "Noise"
+            row["message"] = f"{yamnet_top_lbl} detected"
+        
+        
+        
         self.fout.write(json.dumps(row, ensure_ascii=False) + "\n")
         self.fout.flush()
         self.frame_idx += 1
