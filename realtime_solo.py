@@ -13,7 +13,7 @@ def to_pcm16(w):
 class LocalPANN:
     def __init__(self, device="cuda", min_seconds=1.0):
         self.device = device if torch.cuda.is_available() and device.startswith("cuda") else "cpu"
-        self.model = SoundEventDetection(checkpoint_path=None, device=self.device)
+        self.model = SoundEventDetection(checkpoint_path='./ast/pretrained_models/Cnn14_DecisionLevelMax.pth', device=self.device)
         self.min_seconds = float(min_seconds)
         try:
             self.labels = self.model.labels
