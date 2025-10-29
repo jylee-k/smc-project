@@ -152,7 +152,7 @@ class LocalVGGish:
 class LocalAST:
     def __init__(self, device="cuda", mel_bins: int = 128, target_length: int = 1024,
                  checkpoint_path: str = "ast/pretrained_models/audio_mdl.pth",
-                 label_csv: str = "ast/egs/audioset/data/class_labels_indices.csv"):
+                 label_csv: str = "ast/egs/audioset/class_labels_indices.csv"):
         # avoid clashing with Python stdlib module `ast` by importing via sys.path
         repo_root = os.path.dirname(os.path.abspath(__file__))
         ast_src = os.path.join(repo_root, "ast", "src")
@@ -482,7 +482,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--cfg", default="config.yaml")
-    parser.add_argument("--wav", default=r".\raw_wav\Baby_cry_infant_cry\Bh2dm_FYKpE_30.00_40.00.wav")
+    parser.add_argument("--wav", default=r"D:\NUS_1\CS5647_Sound_and_Music\smc-project\raw_wav\Baby_cry_infant_cry\Bh2dm_FYKpE_30.00_40.00.wav")
     args = parser.parse_args()
 
     solo = RealTimeSolo(args.cfg)
