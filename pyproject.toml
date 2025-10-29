@@ -3,10 +3,17 @@ name = "smc-project"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 dependencies = [
-    "numpy>=2.3.4",
-    "pandas>=2.3.3",
+    "gdown>=5.2.0",
+    "librosa>=0.11.0",
+    "panns-inference>=0.1.1",
+    "pyyaml>=6.0.3",
+    "sounddevice>=0.5.3",
     "streamlit>=1.50.0",
-    "tailer>=0.4.1",
+    "timm==0.4.5",
+    "torch>=2.9.0",
+    "torch-vggish-yamnet>=0.2.1",
+    "torchaudio>=2.9.0",
+    "wget>=3.2",
 ]

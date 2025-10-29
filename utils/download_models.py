@@ -11,7 +11,7 @@ def download_from_drive(file_id, save_dir, filename):
     return output_path
 
 if __name__ == "__main__":
-    save_dir = r"../ast/pretrained_models"
+    save_dir = r"./ast/pretrained_models"
     files = [
         ("1J02zklnEsizdxiasg6zbVmEftz9BYvzQ", "audio_mdl.pth"),
         ("102Kr9hnk3NZ4tNQ6GPlBI70wWKxar5vy", "Cnn14_DecisionLevelMax.pth"),
