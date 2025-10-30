@@ -1,9 +1,11 @@
 import os, json, time, numpy as np, yaml, librosa, torch
+from typing import Optional, List, Dict
 import sys
 from panns_inference import SoundEventDetection
 import torchaudio
 from torch_vggish_yamnet import vggish
-
+from torch_vggish_yamnet.input_proc import WaveformToInput
+import csv
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def to_pcm16(w):
@@ -13,7 +15,7 @@ def to_pcm16(w):
 class LocalPANN:
     def __init__(self, device="cuda", min_seconds=1.0):
         self.device = device if torch.cuda.is_available() and device.startswith("cuda") else "cpu"
-        self.model = SoundEventDetection(checkpoint_path='./ast/pretrained_models/Cnn14_DecisionLevelMax.pth', device=self.device)
+        self.model = SoundEventDetection(checkpoint_path='./ast/pretrained_models/finetuned_panns.pth', device=self.device)
         self.min_seconds = float(min_seconds)
         try:
             self.labels = self.model.labels
@@ -30,124 +32,80 @@ class LocalPANN:
             wave = np.concatenate([wave, pad], axis=0)
         with torch.no_grad():
             out = self.model.inference(torch.tensor(wave).unsqueeze(0))
-        if isinstance(out, dict) and "clipwise_output" in out:
-            probs = out["clipwise_output"]
-        elif isinstance(out, (list, tuple)) and "clipwise_output" in out[0]:
-            probs = out[0]["clipwise_output"]
-        else:
-            tensor = out if isinstance(out, torch.Tensor) else out[0]
-            tensor = torch.as_tensor(tensor)
-            probs = torch.sigmoid(tensor)
-        return probs.detach().cpu().numpy()[0]
+        fw = out[0]
+        probs = fw.max(axis=0)  # [1, 527]
+        return probs
 
 class LocalVGGish:
     def __init__(self, cfg, device="cuda"):
         self.device = device if torch.cuda.is_available() and device.startswith("cuda") else "cpu"
         self.cfg = cfg or {}
-        self.labels = None
 
-        labels_csv = self.cfg.get('labels_csv')
         labels_json = self.cfg.get('labels_json')
+        label_csv = self.cfg.get('label_csv', 'ast/egs/audioset/class_labels_indices.csv')
+        self.full_labels: Optional[List[str]] = None
+        self._name_to_idx: Dict[str, int] = {}
+
+        if label_csv and os.path.exists(label_csv):
+            try:
+                import csv
+                with open(label_csv, 'r', encoding='utf-8') as f:
+                    reader = csv.reader(f)
+                    rows = list(reader)[1:]
+                self.full_labels = [row[2].strip().strip('"') for row in rows]
+                self._name_to_idx = {name: i for i, name in enumerate(self.full_labels)}
+            except Exception:
+                self.full_labels = None
+                self._name_to_idx = {}
+
+        custom_labels: Optional[List[str]] = None
         if labels_json and os.path.exists(labels_json):
             try:
                 with open(labels_json, 'r', encoding='utf-8') as f:
-                    self.labels = json.load(f)
+                    custom_labels = json.load(f)
             except Exception:
-                self.labels = None
-        elif labels_csv and os.path.exists(labels_csv):
-            try:
-                import csv
-                with open(labels_csv, 'r', encoding='utf-8') as f:
-                    reader = csv.reader(f)
-                    rows = list(reader)
-                self.labels = [row[2].strip().strip('"') for row in rows[1:]]
-            except Exception:
-                self.labels = None
+                custom_labels = None
 
-        # Build VGGish feature extractor
-        self.vggish = vggish.get_vggish(with_classifier=False, pretrained=True).to(self.device).eval()
-        # Simple pooling to 128-d feature
-        class MLP(torch.nn.Module):
-            def __init__(self, in_dim=128, n_class=527, hidden=512, dropout=0.2):
-                super().__init__()
-                self.net = torch.nn.Sequential(
-                    torch.nn.Linear(in_dim, hidden),
-                    torch.nn.ReLU(inplace=True),
-                    torch.nn.Dropout(dropout),
-                    torch.nn.Linear(hidden, n_class),
-                )
-            def forward(self, x):
-                return self.net(x)
+        self.custom_indices: Optional[np.ndarray] = None
+        if custom_labels and self._name_to_idx:
+            keep = [self._name_to_idx[name] for name in custom_labels if name in self._name_to_idx]
+            if len(keep) == len(custom_labels):
+                self.custom_indices = np.asarray(keep, dtype=np.int64)
+                self.labels = list(custom_labels)
+            else:
+                self.labels = self.full_labels or list(custom_labels)
+        else:
+            self.labels = self.full_labels
 
-        # Load MLP checkpoint and construct classifier
-        ckpt_path = self.cfg.get('mlp_ckpt')
-        if not ckpt_path or not os.path.exists(ckpt_path):
-            raise RuntimeError("custom_model.mlp_ckpt not found; please set cfg['custom_model']['mlp_ckpt']")
-        ckpt = torch.load(ckpt_path, map_location=self.device)
-        sd = ckpt.get('model_state', ckpt)
-        out_dim = None
-        for k, v in sd.items():
-            if k.endswith('net.3.weight') or k.endswith('net.4.weight') or \
-               k.endswith('net.3.bias') or k.endswith('net.4.bias'):
-                try:
-                    out_dim = int(v.shape[0])
-                except Exception:
-                    pass
-                break
-        if out_dim is None:
-            # fallback to cfg
-            out_dim = int(self.cfg.get('n_class', 527))
-        self.mlp = MLP(in_dim=128, n_class=out_dim).to(self.device)
-        self.mlp.load_state_dict(sd, strict=False)
-        self.mlp.eval()
-
+        self.model = vggish.get_vggish(with_classifier=True, pretrained=True).to(self.device)
+        full_ckpt = self.cfg.get('full_ckpt') or './ast/pretrained_models/finetuned_vggish.pt'
+        if not full_ckpt or not os.path.exists(full_ckpt):
+            raise RuntimeError("custom_model.full_ckpt not found; please set cfg['custom_model']['full_ckpt']")
+        ckpt = torch.load(full_ckpt, map_location=self.device)
+        state = ckpt.get('model_state', ckpt)
+        if isinstance(state, dict):
+            state = {k.replace('module.', ''): v for k, v in state.items()}
+        try:
+            self.model.load_state_dict(state, strict=False)
+        except Exception:
+            pass
+        self.model.eval()
 
     @torch.no_grad()
     def infer_clipwise(self, wave: np.ndarray, sr: int) -> np.ndarray:
-        if sr != 16000:
-            wave = librosa.resample(wave, orig_sr=sr, target_sr=16000)
-            sr = 16000
-
-        # Build VGGish log-mel patch [1,1,96,64]
-        patch = self._vggish_patch_from_wave(wave, sr).to(self.device)
-        feats = self.vggish(patch)
-        if isinstance(feats, (list, tuple)):
-            feats = feats[0]
-        if feats.dim() == 3:
-            feat128 = feats.mean(dim=1)  # [1, 128]
-        elif feats.dim() == 2:
-            feat128 = feats
-        else:
-            raise RuntimeError(f"Unexpected VGGish feature shape: {feats.shape}")
-        logits = self.mlp(feat128)
-        probs = torch.sigmoid(logits).squeeze(0).detach().cpu().numpy()
-        return probs
-
-    def _vggish_patch_from_wave(self, wave: np.ndarray, sr: int) -> torch.Tensor:
-        """Convert mono waveform to a single VGGish log-mel patch [1,1,96,64]."""
-        waveform = torch.tensor(wave, dtype=torch.float32).unsqueeze(0)  # [1, T]
-        fbank = torchaudio.compliance.kaldi.fbank(
-            waveform,
-            htk_compat=True,
-            sample_frequency=sr,
-            use_energy=False,
-            window_type='hanning',
-            num_mel_bins=64,
-            dither=0.0,
-            frame_shift=10
-        )  # [num_frames, 64]
-        # log-compress
-        fbank = torch.log(torch.clamp(fbank, min=1e-6))
-        # 96-frame patch
-        n = fbank.shape[0]
-        if n < 96:
-            pad = torch.zeros((96 - n, 64), dtype=fbank.dtype)
-            patch = torch.cat([pad, fbank], dim=0)
-        else:
-            patch = fbank[-96:, :]
-        # [1,1,96,64]
-        patch = patch.unsqueeze(0).unsqueeze(0)
-        return patch
+        # Build VGGish patches with WaveformToInput to exactly match training
+        x = torch.tensor(wave, dtype=torch.float32).unsqueeze(0)  # [1, T]
+        converter = WaveformToInput()
+        patches = converter(x, sr)  # [N, 1, 96, 64]
+        if patches.shape[0] == 0:
+            return np.zeros((527,), dtype=np.float32)
+        with torch.no_grad():
+            logits = self.model(patches.to(self.device))
+            if isinstance(logits, (list, tuple)):
+                logits = logits[0]
+            probs = torch.sigmoid(logits)      # [N, 527]
+            clip_probs = probs.max(dim=0).values    # [527]
+        return clip_probs.detach().cpu().numpy()
 
 class LocalAST:
     def __init__(self, device="cuda", mel_bins: int = 128, target_length: int = 1024,
@@ -169,15 +127,12 @@ class LocalAST:
 
         # Load labels
         self.labels = None
-        try:
-            import csv
-            with open(label_csv, "r", encoding="utf-8") as f:
-                reader = csv.reader(f)
-                rows = list(reader)
-            # skip header
-            self.labels = [row[2] for row in rows[1:]]
-        except Exception:
-            self.labels = None
+        with open(label_csv, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+        # skip header
+        self.labels = [row[2] for row in rows[1:]]
+
 
         # Build model and load checkpoint
         self.model = ASTModel(label_dim=527, input_tdim=self.target_length,
@@ -238,10 +193,25 @@ class RealTimeSolo:
 
         self.local = LocalPANN(device=device, min_seconds=1.0)
         self.class_list = getattr(self.local, "labels", None)
-        # 完全替换 YAMNet -> 使用方案A (VGGish + 自训 MLP)
         custom_cfg = dict(self.cfg.get('custom_model', {}) or {})
+        tiers_path = custom_cfg.get('label_tiers', 'label_tiers.json')
+        tier_labels: Optional[List[str]] = None
+        if tiers_path and os.path.exists(tiers_path):
+            try:
+                with open(tiers_path, 'r', encoding='utf-8') as f:
+                    tiers = json.load(f)
+                tier1 = tiers.get('tier1') or []
+                tier2 = tiers.get('tier2') or []
+                tier_labels = list(tier1) + list(tier2)
+            except Exception:
+                tier_labels = None
         self.custom = LocalVGGish(device=device, cfg=custom_cfg)
-        self.custom_labels = getattr(self.custom, 'labels', None)
+        if tier_labels and getattr(self.custom, '_name_to_idx', None):
+            keep = [self.custom._name_to_idx.get(lbl) for lbl in tier_labels if self.custom._name_to_idx.get(lbl) is not None]
+            if len(keep) == len(tier_labels):
+                self.custom.custom_indices = np.asarray(keep, dtype=np.int64)
+                self.custom.labels = list(tier_labels)
+        self.custom_labels = tier_labels if tier_labels else getattr(self.custom, 'labels', None)
         self.ast = LocalAST(device=device)
         self.ast_labels = self.ast.labels
         self.win_seconds = 1.0
@@ -256,6 +226,7 @@ class RealTimeSolo:
         # Build mapping from base label spaces -> custom label space (if provided)
         self._pann_sel_idx = None
         self._ast_sel_idx = None
+        self._vgg_sel_idx = None
         if self.custom_labels:
             try:
                 self._pann_sel_idx = self._build_label_index(self.class_list, self.custom_labels)
@@ -265,6 +236,11 @@ class RealTimeSolo:
                 self._ast_sel_idx = self._build_label_index(self.ast_labels, self.custom_labels)
             except Exception:
                 self._ast_sel_idx = None
+            try:
+                base_vgg = getattr(self.custom, 'full_labels', None) or getattr(self.custom, 'labels', None)
+                self._vgg_sel_idx = self._build_label_index(base_vgg, self.custom_labels)
+            except Exception:
+                self._vgg_sel_idx = None
 
         # Fusion weights (MoE-style static gating). Config example:
         # fusion:
@@ -290,10 +266,6 @@ class RealTimeSolo:
         return result
 
     def _restrict_to_custom_softmax(self, full_probs: np.ndarray, sel_idx: list) -> np.ndarray:
-        """Select probabilities for custom classes and apply softmax over them.
-        - Treat missing indices (None) as prob=0 before logit transform.
-        - Convert sigmoid probs to logits via logit, then softmax across selected classes.
-        """
         if sel_idx is None:
             return None
         out = np.zeros((len(sel_idx),), dtype=np.float32)
@@ -391,8 +363,13 @@ class RealTimeSolo:
         local_top_lbl = pann_labels[local_top_idx] if pann_labels else f"class_{local_top_idx}"
         local_top_score = float(pann_dist[local_top_idx])
 
-        vgg_dist = self._sigmoid_to_softmax(custom_prob)
-        custom_labels = self.custom_labels
+        vgg8 = self._restrict_to_custom_softmax(custom_prob, self._vgg_sel_idx) if self._vgg_sel_idx is not None else None
+        if vgg8 is not None and self.custom_labels:
+            vgg_dist = vgg8
+            custom_labels = self.custom_labels
+        else:
+            vgg_dist = self._sigmoid_to_softmax(custom_prob)
+            custom_labels = getattr(self.custom, 'labels', None)
         custom_top_idx = int(np.argmax(vgg_dist))
         custom_top_lbl = custom_labels[custom_top_idx] if custom_labels else f"class_{custom_top_idx}"
         custom_top_score = float(vgg_dist[custom_top_idx])
@@ -409,7 +386,6 @@ class RealTimeSolo:
         ast_top_lbl = ast_labels[ast_top_idx] if ast_labels else f"class_{ast_top_idx}"
         ast_top_score = float(ast_dist[ast_top_idx])
 
-        # Fused (MoE-style weighted sum) in custom 8-class space when possible
         fused_dist = None
         fused_labels = None
         if self.custom_labels:
@@ -482,7 +458,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--cfg", default="config.yaml")
-    parser.add_argument("--wav", default=r"D:\NUS_1\CS5647_Sound_and_Music\smc-project\raw_wav\Baby_cry_infant_cry\Bh2dm_FYKpE_30.00_40.00.wav")
+    parser.add_argument("--wav", default=r".\raw_wav\Vehicle\1PQCymDynPs_240.00_250.00.wav")
     args = parser.parse_args()
 
     solo = RealTimeSolo(args.cfg)
