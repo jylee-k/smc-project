@@ -8,7 +8,7 @@ from datetime import datetime
 import librosa
 import numpy as np
 
-# Import the necessary classes from your other files
+#other scripts
 from record_sound import ChunkRecorder
 from realtime_solo import RealTimeSolo
 
@@ -31,13 +31,13 @@ def load_pipeline():
     Loads the RealTimeSolo ML pipeline using Streamlit's caching.
     This ensures the model is loaded only once per session.
     """
-    print("--- LOADING ML PIPELINE (This should only run once!) ---")
+    print("--- LOADING ML PIPELINE ---")
     try:
         pipeline = RealTimeSolo(CONFIG_FILE_PATH)
         print("--- ML Pipeline Loaded Successfully ---")
         return pipeline
     except Exception as e:
-        print(f"FATAL ERROR: Could not load ML pipeline: {e}")
+        print(f"ERROR: Could not load ML pipeline: {e}")
         st.error(f"Error loading ML pipeline: {e}. Please check config.yaml and model paths.")
         return None
 
@@ -74,7 +74,7 @@ def pipeline_target(stop_event_flag, pipeline_instance):
         recorder = ChunkRecorder(
             sr=16000,
             channels=1,
-            chunk_size_sec=2.0,
+            chunk_size_sec=2.0, #change this for chunk size change from microphone
             on_chunk=on_chunk_callback
         )
         
@@ -88,7 +88,7 @@ def pipeline_target(stop_event_flag, pipeline_instance):
         print("Stopping pipeline session...")
         recorder.stop()
         solo.stop_session()
-        print("Pipeline thread stopped gracefully.")
+        print("Pipeline thread stopped without issues.")
     except Exception as e:
         print(f"Error in pipeline thread: {e}")
 
@@ -116,10 +116,31 @@ def initialize_session_state():
     else:
         print("Warning: Could not load custom_labels from pipeline for personalization.")
 
-    _critical_substrings = ["fire alarm", "smoke detector", "siren", "screaming", "baby cry", "explosion", "gunshot", "glass"]
-    _warning_substrings = ["car alarm", "alarm clock", "shout", "crying", "slam", "ringing", "horn", "bark", "dog"]
-    _info_substrings = ["doorbell", "knock", "footsteps", "door", "typing", "water", "laughter", "speech"]
+    # Define default tiers based on keywords
+    # --- Tier 3: Critical (Immediate Danger / High Priority) ---
+    _critical_substrings = [
+        "fire alarm", "smoke detector", "siren", "screaming", "baby cry", 
+        "explosion", "gunshot", "machine gun", "breaking", "shatter", "glass"
+    ]
+    
+    # --- Tier 2: Warning (Needs Attention) ---
+    _warning_substrings = [
+        "car alarm", "alarm clock", "shout", "crying", "slam", "ringing", 
+        "ringtone", "horn", "bark", "dog", "thunder", "fireworks", "firecracker"
+    ]
 
+    # --- Tier 1: Info (Contextual / Environmental) ---
+    _info_substrings = [
+        "doorbell", "knock", "footsteps", "door", "keys jangling", "typing", 
+        "keyboard", "dishes", "cutlery", "chopping", "frying", "microwave", 
+        "blender", "water", "sink", "bathtub", "toilet flush", "hair dryer", 
+        "vacuum cleaner", "car passing by", "bus", "truck", "motorcycle", 
+        "train", "subway", "aircraft", "helicopter", "bicycle", "skateboard", 
+        "rain", "wind", "bird", "cat", "meow", "applause", "laughter", 
+        "conversation", "speech", "vehicle"
+    ]
+
+    # --- Automatically build the default tier lists from the keywords ---
     DEFAULT_CRITICAL = [lbl for lbl in ALL_LABELS if any(s in lbl.lower() for s in _critical_substrings)]
     DEFAULT_WARNING = [lbl for lbl in ALL_LABELS if any(s in lbl.lower() for s in _warning_substrings)]
     DEFAULT_INFO = [lbl for lbl in ALL_LABELS if any(s in lbl.lower() for s in _info_substrings)]
@@ -138,12 +159,12 @@ def initialize_session_state():
         'critical_tier_labels': DEFAULT_CRITICAL,
         'warning_tier_labels': DEFAULT_WARNING,
         'info_tier_labels': DEFAULT_INFO,
-        'critical_threshold': 0.4,
-        'warning_threshold': 0.4,
+        'critical_threshold': 0.6,
+        'warning_threshold': 0.6,
         'info_threshold': 0.6,
         'processing_file': False,
         'last_file_id': None,
-        'critical_dialog_open': False, # Flag to pause main loop
+        'critical_dialog_open': False,
     }
 
     for key, value in defaults.items():
@@ -162,11 +183,9 @@ def show_critical_alert_dialog(alert):
     Displays a modal dialog for critical (Tier 3) alerts.
     This function is called on *every* rerun as long as the alert is active.
     """
-    # Set flag to True to pause the main refresh loop
     st.session_state.critical_dialog_open = True
     
     st.markdown(f"## {alert['type']}")
-    # FIX 1: Display score as percentage
     st.markdown(f"**Score:** {alert['message']}")
     try:
         alert_time = datetime.fromtimestamp(alert['time']).strftime('%I:%M:%S %p')
@@ -186,7 +205,7 @@ def show_critical_alert_dialog(alert):
             if st.session_state.stop_event:
                 st.session_state.stop_event.set()
             st.session_state.pipeline_running = False
-            st.success("Microphone stopped due to critical alert acknowledgment.")
+            st.success("Alert acknowledgment, stop microphone.")
             time.sleep(0.5) 
         
         # 3. Close the dialog and rerun
@@ -205,7 +224,6 @@ def parse_prediction_to_alert(alert_data):
     label = pred.get("top_label", "Unknown")
     score = pred.get("top_score", 0)
     tier = 0
-    # FIX 1: Format score as percentage string
     message = f"{score:.1%}"
     label_lower = label.lower()
 
@@ -239,8 +257,10 @@ def display_alert_card(alert):
     This function handles the visual state for acknowledged vs. unacknowledged alerts.
     """
     icon = "ℹ️"
-    if alert['tier'] == 3: icon = "🚨"
-    elif alert['tier'] == 2: icon = "⚠️"
+    if alert['tier'] == 3: 
+        icon = "🚨"
+    elif alert['tier'] == 2: 
+        icon = "⚠️"
 
     is_acknowledged = alert['id'] in st.session_state.acknowledged_ids
 
@@ -264,7 +284,6 @@ def display_alert_card(alert):
             else:
                 st.markdown(f"**{alert['type']}** detected")
 
-            # FIX 1: Display score as percentage (it's pre-formatted)
             st.caption(f"Score: {alert['message']} | {alert_time}")
 
         with c3:
@@ -278,7 +297,7 @@ def display_alert_card(alert):
 
 
 # --- 5. SIDEBAR CONTROLS ---
-st.sidebar.title("Controls")
+st.sidebar.title("Microphone Status")
 if st.session_state.pipeline_running:
     st.sidebar.markdown("**Microphone Status:** 🟢 Running")
 else:
@@ -289,7 +308,7 @@ st.sidebar.divider()
 
 st.sidebar.radio(
     "Active Profile", ["Normal", "Sleep", "DND"],
-    key='active_profile', horizontal=True,
+    key='active_profile', horizontal=False,
 )
 st.sidebar.caption("**Normal**: All. **Sleep**: Warning & Critical. **DND**: Critical only.")
 
@@ -412,28 +431,33 @@ with tab_dashboard:
 
             fused_label = fused_pred.get("top_label", "N/A")
             fused_score = fused_pred.get("top_score", 0)
-            if fused_score < 0.5: fused_label = "No output"
             
-            # FIX 1 & 2: Format as percentage and use full "Confidence" word
+            #say no output if below confidence score
+            if fused_score < 0.60: 
+                fused_label = "No output"
+            
             live_container.metric("**Fused Model**", fused_label, f"{fused_score:.1%} Confidence")
             
             live_container.divider()
             m_col1, m_col2, m_col3 = live_container.columns(3)
             with m_col1:
                 st.markdown("**PANN**")
-                pann_label = pann_pred.get("top_label", "N/A"); pann_score = pann_pred.get("top_score", 0)
-                # FIX 1 & 2: Format as percentage and use full "Confidence" word
-                st.write(f"{pann_label}"); st.caption(f"({pann_score:.1%} Confidence)")
+                pann_label = pann_pred.get("top_label", "N/A")
+                pann_score = pann_pred.get("top_score", 0)
+                st.write(f"{pann_label}")
+                st.caption(f"({pann_score:.1%} Confidence)")
             with m_col2:
                 st.markdown("**VGGish**")
-                vgg_label = vgg_pred.get("top_label", "N/A"); vgg_score = vgg_pred.get("top_score", 0)
-                # FIX 1 & 2: Format as percentage and use full "Confidence" word
-                st.write(f"{vgg_label}"); st.caption(f"({vgg_score:.1%} Confidence)")
+                vgg_label = vgg_pred.get("top_label", "N/A")
+                vgg_score = vgg_pred.get("top_score", 0)
+                st.write(f"{vgg_label}")
+                st.caption(f"({vgg_score:.1%} Confidence)")
             with m_col3:
                 st.markdown("**AST**")
-                ast_label = ast_pred.get("top_label", "N/A"); ast_score = ast_pred.get("top_score", 0)
-                # FIX 1 & 2: Format as percentage and use full "Confidence" word
-                st.write(f"{ast_label}"); st.caption(f"({ast_score:.1%} Confidence)")
+                ast_label = ast_pred.get("top_label", "N/A")
+                ast_score = ast_pred.get("top_score", 0)
+                st.write(f"{ast_label}")
+                st.caption(f"({ast_score:.1%} Confidence)")
 
     with col_alerts:
         # --- 7. ALERT PROCESSING ---
@@ -501,26 +525,31 @@ with tab_dashboard:
         tier1_alerts = [a for a in all_active if a.get('tier') == 1]
         active_profile = st.session_state.active_profile
 
-        # FIX 3: Added emojis and descriptions to captions
         with st.expander(f"🚨 Tier 3: Critical ({len(tier3_alerts)})", expanded=True):
-            st.caption("📱 **Action:** Strong Vibration, Phone Flash & Smartwatch Alert 🚨")
-            if not tier3_alerts: st.write("✅ No critical alerts.")
+            st.caption("📱 **Action:** Strong-Vibration, Phone Camera Flash & Smartwatch Alert")
+            if not tier3_alerts: 
+                st.write("✅ No critical alerts.")
             else:
-                for alert in tier3_alerts: display_alert_card(alert)
+                for alert in tier3_alerts: 
+                    display_alert_card(alert)
         
         if active_profile in ['Normal', 'Sleep']:
             with st.expander(f"⚠️ Tier 2: Warning ({len(tier2_alerts)})", expanded=True):
-                st.caption("⌚️ **Action:** Vibration & Smartwatch Alert")
-                if not tier2_alerts: st.write("✅ No warning alerts.")
+                st.caption("⌚️ **Action:** Phone Soft-Vibration & Smartwatch Alert")
+                if not tier2_alerts: 
+                    st.write("✅ No warning alerts.")
                 else:
-                    for alert in tier2_alerts: display_alert_card(alert)
+                    for alert in tier2_alerts: 
+                        display_alert_card(alert)
         
         if active_profile == 'Normal':
             with st.expander(f"ℹ️ Tier 1: Info ({len(tier1_alerts)})", expanded=True):
                 st.caption("ℹ️ **Action:** Standard Phone Notification")
-                if not tier1_alerts: st.write("✅ No info alerts.")
+                if not tier1_alerts:
+                    st.write("✅ No info alerts.")
                 else:
-                    for alert in tier1_alerts: display_alert_card(alert)
+                    for alert in tier1_alerts: 
+                        display_alert_card(alert)
 
 with tab_finetune:
     st.subheader("Submit Audio for Model Improvement")
@@ -544,11 +573,9 @@ with tab_finetune:
                 st.success("Thank you! We are uploading the audio clip and we will proceed to finetune with the new labels.")
 
 # --- 9. AUTO-REFRESH LOOP ---
-# This loop now *only* runs if the pipeline is active
-# AND the critical dialog is NOT open. This pauses the loop.
 if st.session_state.pipeline_running and not st.session_state.get('critical_dialog_open', False):
     try:
-        time.sleep(2.5) # Your requested 2.5s loop
+        time.sleep(1)
         st.rerun()
     except Exception as e:
         pass

@@ -384,7 +384,8 @@ class RealTimeSolo:
 
     def start_session(self):
         """Opens the log file and resets session state."""
-        if self.started: return
+        if self.started: 
+            return
         self.fout = open(self.out_jsonl, "a", encoding="utf-8")
         self.session_t0 = time.time()
         self.frame_idx = 0
@@ -392,7 +393,8 @@ class RealTimeSolo:
 
     def stop_session(self):
         """Closes the log file and writes a session summary."""
-        if not self.started: return
+        if not self.started: 
+            return
         try:
             self.fout.close()
         except:
