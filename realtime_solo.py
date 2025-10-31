@@ -338,14 +338,11 @@ class RealTimeSolo:
         t_start = self.frame_idx * win_sec
         t_end   = t_start + win_sec
 
-        self.win_buffer = np.concatenate([self.win_buffer, wave_chunk], axis=0)
-        if self.win_buffer.shape[0] > self.win_samples:
-            self.win_buffer = self.win_buffer[-self.win_samples:]
-        if self.win_buffer.shape[0] < self.win_samples:
-            pad = np.zeros((self.win_samples - self.win_buffer.shape[0],), np.float32)
-            local_window = np.concatenate([pad, self.win_buffer], axis=0)
-        else:
-            local_window = self.win_buffer
+        # --- MODIFIED: Replaced buffering logic ---
+        # The app.py sends a full 2.0s chunk. The old code was truncating
+        # this to 1.0s. This change processes the *entire* 2.0s chunk.
+        local_window = wave_chunk
+        # --- END MODIFICATION ---
 
         local_prob = self.local.infer_clipwise(local_window, sr=self.sr)
         custom_prob = self.custom.infer_clipwise(local_window, sr=self.sr)

@@ -6,9 +6,9 @@ stream:
 
 fusion:
   weights:
-    PANN: 0.2
-    VGGish: 0.6
-    AST: 0.2
+    PANN: 0.5
+    VGGish: 0.1
+    AST: 0.4
 
 local_models:
   - type: "pann"
