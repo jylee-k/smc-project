@@ -1,6 +1,12 @@
 import streamlit as st
-import json, time, os, threading
-import yaml  # Not strictly needed, but good practice if config expands
+import json
+import time
+import os
+import threading
+import yaml
+from datetime import datetime
+import librosa
+import numpy as np
 
 # Import the necessary classes from your other files
 from record_sound import ChunkRecorder
@@ -13,298 +19,536 @@ st.set_page_config(
 )
 
 # --- CONFIGURATION ---
-LOG_FILE_PATH = "runs/stream_preds.jsonl" 
+LOG_FILE_PATH = "runs/stream_preds.jsonl"
 CONFIG_FILE_PATH = "config.yaml"
-
-# Ensure the 'runs' directory exists
 os.makedirs(os.path.dirname(LOG_FILE_PATH) or ".", exist_ok=True)
 
 
-# --- BACKGROUND PIPELINE THREAD ---
-def pipeline_target(stop_event_flag):
+# --- 1. MODEL CACHING ---
+@st.cache_resource
+def load_pipeline():
     """
-    Target function for the audio processing thread.
-    This function will run in the background.
+    Loads the RealTimeSolo ML pipeline using Streamlit's caching.
+    This ensures the model is loaded only once per session.
     """
+    print("--- LOADING ML PIPELINE (This should only run once!) ---")
     try:
-        # 1. Initialize the ML pipeline
-        solo = RealTimeSolo(CONFIG_FILE_PATH) 
+        pipeline = RealTimeSolo(CONFIG_FILE_PATH)
+        print("--- ML Pipeline Loaded Successfully ---")
+        return pipeline
+    except Exception as e:
+        print(f"FATAL ERROR: Could not load ML pipeline: {e}")
+        st.error(f"Error loading ML pipeline: {e}. Please check config.yaml and model paths.")
+        return None
 
-        # 2. Define the callback for when audio chunks are ready
+solo_pipeline = load_pipeline()
+
+
+# --- 2. BACKGROUND THREAD TARGET ---
+def pipeline_target(stop_event_flag, pipeline_instance):
+    """
+    The main function executed in a separate thread for real-time audio processing.
+    It sets up the ChunkRecorder and processes audio chunks via the pipeline.
+
+    Args:
+        stop_event_flag (threading.Event): An event to signal when the thread should stop.
+        pipeline_instance (RealTimeSolo): The loaded ML pipeline instance.
+    """
+    solo = pipeline_instance
+    if solo is None:
+        print("Error: Pipeline instance is None. Thread cannot start.")
+        st.error("ML Models not loaded. Cannot start pipeline.")
+        return
+
+    try:
         def on_chunk_callback(chunk):
-            """This callback passes audio chunks to the ML model."""
+            """Callback function passed to ChunkRecorder."""
             try:
                 if not stop_event_flag.is_set():
                     solo.process_chunk(chunk, chunk_sr=16000)
                 else:
                     print("Stop event set, skipping chunk processing.")
             except Exception as e:
-                print(f"Error processing chunk: {e}") # Log to console
+                print(f"Error processing chunk: {e}")
 
-        # 3. Initialize the recorder
         recorder = ChunkRecorder(
-            sr=16000, 
-            channels=1, 
-            chunk_size_sec=2.0, 
+            sr=16000,
+            channels=1,
+            chunk_size_sec=2.0,
             on_chunk=on_chunk_callback
         )
-
-        # 4. Start processing
+        
         print("Starting pipeline session...")
         solo.start_session()
         recorder.start()
-        
-        # 5. Wait for the stop signal
-        while not stop_event_flag.is_set():
-            time.sleep(0.1) # Polling to keep the thread alive
 
-        # 6. Stop and clean up
+        while not stop_event_flag.is_set():
+            time.sleep(0.1)
+
         print("Stopping pipeline session...")
         recorder.stop()
         solo.stop_session()
         print("Pipeline thread stopped gracefully.")
-
     except Exception as e:
         print(f"Error in pipeline thread: {e}")
 
 
-# --- SESSION STATE INITIALIZATION ---
-if 'log_file' not in st.session_state:
-    st.session_state.log_file = LOG_FILE_PATH
-if 'pipeline_running' not in st.session_state:
-    st.session_state.pipeline_running = False
-if 'pipeline_thread' not in st.session_state:
-    st.session_state.pipeline_thread = None
-if 'stop_event' not in st.session_state:
-    st.session_state.stop_event = None
-if 'file_pos' not in st.session_state:
-    st.session_state.file_pos = 0
-if 'alerts' not in st.session_state:
-    st.session_state.alerts = []
-if 'acknowledged_ids' not in st.session_state:
-    st.session_state.acknowledged_ids = set()
-if 'last_prediction' not in st.session_state:
-    st.session_state.last_prediction = None
+# --- 3. SESSION STATE ---
+def initialize_session_state():
+    """
+    Sets up the initial Streamlit session state variables.
+    This runs once at the beginning of the session.
+    """
+    if not os.path.exists(LOG_FILE_PATH):
+        open(LOG_FILE_PATH, 'w').close()
+    start_pos = 0
+    try:
+        with open(LOG_FILE_PATH, 'r') as f:
+            f.seek(0, os.SEEK_END)
+            start_pos = f.tell()
+    except Exception as e:
+        print(f"Warning: Could not get log file size. {e}")
+        start_pos = 0
 
+    ALL_LABELS = []
+    if solo_pipeline and hasattr(solo_pipeline, 'custom_labels') and solo_pipeline.custom_labels:
+        ALL_LABELS = sorted(solo_pipeline.custom_labels)
+    else:
+        print("Warning: Could not load custom_labels from pipeline for personalization.")
 
+    _critical_substrings = ["fire alarm", "smoke detector", "siren", "screaming", "baby cry", "explosion", "gunshot", "glass"]
+    _warning_substrings = ["car alarm", "alarm clock", "shout", "crying", "slam", "ringing", "horn", "bark", "dog"]
+    _info_substrings = ["doorbell", "knock", "footsteps", "door", "typing", "water", "laughter", "speech"]
+
+    DEFAULT_CRITICAL = [lbl for lbl in ALL_LABELS if any(s in lbl.lower() for s in _critical_substrings)]
+    DEFAULT_WARNING = [lbl for lbl in ALL_LABELS if any(s in lbl.lower() for s in _warning_substrings)]
+    DEFAULT_INFO = [lbl for lbl in ALL_LABELS if any(s in lbl.lower() for s in _info_substrings)]
+
+    defaults = {
+        'log_file': LOG_FILE_PATH,
+        'pipeline_running': False,
+        'pipeline_thread': None,
+        'stop_event': None,
+        'file_pos': start_pos,
+        'alerts': [],
+        'acknowledged_ids': set(),
+        'last_prediction': None,
+        'active_profile': 'Normal',
+        'all_labels': ALL_LABELS,
+        'critical_tier_labels': DEFAULT_CRITICAL,
+        'warning_tier_labels': DEFAULT_WARNING,
+        'info_tier_labels': DEFAULT_INFO,
+        'critical_threshold': 0.4,
+        'warning_threshold': 0.4,
+        'info_threshold': 0.6,
+        'processing_file': False,
+        'last_file_id': None,
+        'critical_dialog_open': False, # Flag to pause main loop
+    }
+
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+initialize_session_state()
 LOG_FILE = st.session_state.log_file
 
-# Ensure the log file exists
-if not os.path.exists(LOG_FILE):
-    open(LOG_FILE, 'w').close()
+
+# --- 4. HELPER FUNCTIONS ---
+
+@st.dialog("🚨 Critical Alert Detected!", dismissible=False)
+def show_critical_alert_dialog(alert):
+    """
+    Displays a modal dialog for critical (Tier 3) alerts.
+    This function is called on *every* rerun as long as the alert is active.
+    """
+    # Set flag to True to pause the main refresh loop
+    st.session_state.critical_dialog_open = True
+    
+    st.markdown(f"## {alert['type']}")
+    # FIX 1: Display score as percentage
+    st.markdown(f"**Score:** {alert['message']}")
+    try:
+        alert_time = datetime.fromtimestamp(alert['time']).strftime('%I:%M:%S %p')
+    except Exception:
+        alert_time = "Just now"
+    st.markdown(f"**Time:** {alert_time}")
+    st.warning("This is a critical alert and requires your attention.")
+
+    if st.button("Acknowledge", use_container_width=True, type="primary"):
+        # 1. Acknowledge the alert
+        new_ids = st.session_state.acknowledged_ids.copy()
+        new_ids.add(alert['id'])
+        st.session_state.acknowledged_ids = new_ids
+        
+        # 2. Stop the microphone pipeline if it's running
+        if st.session_state.pipeline_running:
+            if st.session_state.stop_event:
+                st.session_state.stop_event.set()
+            st.session_state.pipeline_running = False
+            st.success("Microphone stopped due to critical alert acknowledgment.")
+            time.sleep(0.5) 
+        
+        # 3. Close the dialog and rerun
+        st.session_state.critical_dialog_open = False
+        st.rerun()
+
+def parse_prediction_to_alert(alert_data):
+    """
+    Parses a raw prediction dictionary from the log file into a formatted alert object.
+    Applies tier logic, confidence thresholds, and profile (DND/Sleep) filters.
+    """
+    pred = alert_data.get("Fused")
+    if not pred:
+        return None
+
+    label = pred.get("top_label", "Unknown")
+    score = pred.get("top_score", 0)
+    tier = 0
+    # FIX 1: Format score as percentage string
+    message = f"{score:.1%}"
+    label_lower = label.lower()
+
+    if label_lower in [l.lower() for l in st.session_state.critical_tier_labels] and score > st.session_state.critical_threshold:
+        tier = 3
+    elif label_lower in [l.lower() for l in st.session_state.warning_tier_labels] and score > st.session_state.warning_threshold:
+        tier = 2
+    elif label_lower in [l.lower() for l in st.session_state.info_tier_labels] and score > st.session_state.info_threshold:
+        tier = 1
+
+    active_profile = st.session_state.active_profile
+    if active_profile == 'DND' and tier < 3:
+        return None
+    if active_profile == 'Sleep' and tier < 2:
+        return None
+
+    if tier > 0:
+        group_id = f"{tier}-{label.capitalize()}"
+        alert_time = alert_data.get('time_start', time.time())
+        session_start_time = solo_pipeline.session_t0 if (solo_pipeline and solo_pipeline.session_t0) else time.time()
+        
+        return {
+            "id": group_id, "tier": tier, "type": label.capitalize(),
+            "message": message, "time": session_start_time + alert_time
+        }
+    return None
+
+def display_alert_card(alert):
+    """
+    Renders a single alert card in the UI.
+    This function handles the visual state for acknowledged vs. unacknowledged alerts.
+    """
+    icon = "ℹ️"
+    if alert['tier'] == 3: icon = "🚨"
+    elif alert['tier'] == 2: icon = "⚠️"
+
+    is_acknowledged = alert['id'] in st.session_state.acknowledged_ids
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([1, 6, 2], vertical_alignment="center")
+
+        with c1:
+            if is_acknowledged:
+                st.markdown(f"<span style='font-size: 32px;'>✅</span>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<span style='font-size: 32px;'>{icon}</span>", unsafe_allow_html=True)
+
+        with c2:
+            try:
+                alert_time = datetime.fromtimestamp(alert['time']).strftime('%I:%M:%S %p')
+            except Exception:
+                alert_time = "Just now"
+
+            if is_acknowledged:
+                st.markdown(f"**{alert['type']}** detected (Acknowledged)")
+            else:
+                st.markdown(f"**{alert['type']}** detected")
+
+            # FIX 1: Display score as percentage (it's pre-formatted)
+            st.caption(f"Score: {alert['message']} | {alert_time}")
+
+        with c3:
+            if alert['tier'] >= 2:
+                if st.button("Acknowledge", key=f"ack_{alert['id']}",
+                             help="Acknowledge this alert",
+                             disabled=is_acknowledged):
+                    
+                    st.session_state.acknowledged_ids.add(alert['id'])
+                    st.rerun()
 
 
-# --- MODIFIED: SIDEBAR CONTROLS ---
+# --- 5. SIDEBAR CONTROLS ---
 st.sidebar.title("Controls")
+if st.session_state.pipeline_running:
+    st.sidebar.markdown("**Microphone Status:** 🟢 Running")
+else:
+    st.sidebar.markdown("**Microphone Status:** 🔴 Stopped")
+if solo_pipeline is None:
+    st.sidebar.error("Models failed to load. Cannot start.")
+st.sidebar.divider()
 
-if st.sidebar.button("🎤 Start Microphone", use_container_width=True):
+st.sidebar.radio(
+    "Active Profile", ["Normal", "Sleep", "DND"],
+    key='active_profile', horizontal=True,
+)
+st.sidebar.caption("**Normal**: All. **Sleep**: Warning & Critical. **DND**: Critical only.")
+
+if st.sidebar.button("🎤 Start Microphone", use_container_width=True, disabled=(solo_pipeline is None)):
     if not st.session_state.pipeline_running:
         stop_event = threading.Event()
-        thread = threading.Thread(
-            target=pipeline_target, 
-            args=(stop_event,), 
-            daemon=True
-        )
+        thread = threading.Thread(target=pipeline_target, args=(stop_event, solo_pipeline,), daemon=True)
         thread.start()
         st.session_state.stop_event = stop_event
         st.session_state.pipeline_thread = thread
         st.session_state.pipeline_running = True
         st.success("Pipeline started")
-        st.rerun() 
+        st.rerun()
 
 if st.sidebar.button("❌ Stop Microphone", use_container_width=True):
     if st.session_state.pipeline_running:
         if st.session_state.stop_event:
             st.session_state.stop_event.set()
         st.session_state.pipeline_running = False
-        time.sleep(0.5) 
+        time.sleep(0.5)
         st.success("Pipeline stopped")
-        st.rerun() 
+        st.rerun()
 
 if st.sidebar.button("🗑️ Reset Alerts", use_container_width=True):
     open(LOG_FILE, 'w').close()
     st.session_state.alerts = []
     st.session_state.acknowledged_ids = set()
     st.session_state.file_pos = 0
-    st.session_state.last_prediction = None # Reset live view
+    st.session_state.last_prediction = None
     st.warning("Alerts reset")
-    st.rerun() 
-
-# Show pipeline status in sidebar
+    st.rerun()
 st.sidebar.divider()
-if st.session_state.pipeline_running:
-    st.sidebar.markdown("**Microphone Status:** 🟢 Running")
-else:
-    st.sidebar.markdown("**Microphone Status:** 🔴 Stopped")
+
+with st.sidebar.expander("Customize Alert Tiers"):
+    if not st.session_state.all_labels:
+        st.warning("Model labels not loaded. Cannot customize tiers.")
+    else:
+        st.multiselect("🚨 Tier 3: Critical", options=st.session_state.all_labels, key="critical_tier_labels")
+        st.multiselect("⚠️ Tier 2: Warning", options=st.session_state.all_labels, key="warning_tier_labels")
+        st.multiselect("ℹ️ Tier 1: Info", options=st.session_state.all_labels, key="info_tier_labels")
+        st.divider()
+        st.slider("🚨 Critical Confidence", 0.0, 1.0, key="critical_threshold", step=0.05)
+        st.slider("⚠️ Warning Confidence", 0.0, 1.0, key="warning_threshold", step=0.05)
+        st.slider("ℹ️ Info Confidence", 0.0, 1.0, key="info_threshold", step=0.05)
+
+st.sidebar.divider()
+st.sidebar.markdown("### 🔈 Demo Mode")
+uploaded_file = st.sidebar.file_uploader(
+    "Test with an audio file", type=["wav", "mp3", "flac"],
+    help="Uploading a file will stop the microphone and process the file instead."
+)
 
 
-# --- MAIN PAGE ---
+# --- 6. MAIN PAGE ---
 st.title("SilentSignals: Real-Time Event Based Alerts")
 
-# --- MODIFIED: LIVE MODEL DETECTION (in an Expander) ---
-with st.expander("📈 Show Live Model Detections", expanded=False):
-    live_container = st.container() # No border needed inside expander
-    if st.session_state.last_prediction is None:
-        live_container.info("Start the microphone to see live detections.")
-    else:
-        pred_data = st.session_state.last_prediction
+tab_dashboard, tab_finetune = st.tabs(["🚨 Live Dashboard", "🔬 Submit for Finetuning"])
+
+with tab_dashboard:
+    if uploaded_file is not None:
+        file_id = (uploaded_file.name, uploaded_file.size)
+        if file_id != st.session_state.get('last_file_id'):
+            st.session_state.processing_file = True
+            
+            if st.session_state.pipeline_running:
+                if st.session_state.stop_event:
+                    st.session_state.stop_event.set()
+                st.session_state.pipeline_running = False
+                st.warning("Microphone stopped to process uploaded file.")
+                time.sleep(0.5)
+
+            st.info(f"Processing uploaded file: `{uploaded_file.name}`. Please wait...")
+
+            try:
+                y, sr = librosa.load(uploaded_file, sr=16000, mono=True)
+                chunk_samples = int(16000 * 2.0)
+                
+                if solo_pipeline:
+                    solo_pipeline.start_session()
+                    progress_bar = st.progress(0, "Processing audio...")
+                    total_chunks = (len(y) + chunk_samples - 1) // chunk_samples
+
+                    for i, chunk_num in enumerate(range(0, len(y), chunk_samples)):
+                        chunk = y[chunk_num : chunk_num + chunk_samples]
+                        if len(chunk) < chunk_samples:
+                            pad = np.zeros(chunk_samples - len(chunk), dtype=np.float32)
+                            chunk = np.concatenate([chunk, pad])
+                        
+                        solo_pipeline.process_chunk(chunk, chunk_sr=16000)
+                        progress_bar.progress((i + 1) / total_chunks, f"Processing chunk {i+1}/{total_chunks}")
+                        
+                    solo_pipeline.stop_session()
+                    progress_bar.empty()
+                    st.success(f"File processing complete. {total_chunks} chunks analyzed.")
+                    st.session_state.last_file_id = file_id
+                else:
+                    st.error("Models not loaded. Cannot process file.")
+            except Exception as e:
+                st.error(f"Error processing file: {e}")
+            finally:
+                st.session_state.processing_file = False
+                st.rerun()
+
+    col_alerts, col_live = st.columns([1, 1])
+
+    with col_live:
+        st.subheader("📈 Live Detections")
+        live_container = st.container(border=True)
         
-        # Get data for each model, with fallbacks
-        fused_pred = pred_data.get("Fused", {})
-        pann_pred = pred_data.get("PANN", {})
-        vgg_pred = pred_data.get("VGGish", {})
-        ast_pred = pred_data.get("AST", {})
+        if st.session_state.processing_file:
+            live_container.info("Demo file processing in progress...")
+        elif st.session_state.last_prediction is None:
+            live_container.info("Start the microphone or upload a file.")
+        else:
+            pred_data = st.session_state.last_prediction
+            fused_pred = pred_data.get("Fused", {})
+            pann_pred = pred_data.get("PANN", {})
+            vgg_pred = pred_data.get("VGGish", {})
+            ast_pred = pred_data.get("AST", {})
 
-        # --- THIS IS THE FIRST FIX ---
-        m_col1, m_col2, m_col3, m_col4 = live_container.columns(4)
+            fused_label = fused_pred.get("top_label", "N/A")
+            fused_score = fused_pred.get("top_score", 0)
+            if fused_score < 0.5: fused_label = "No output"
+            
+            # FIX 1 & 2: Format as percentage and use full "Confidence" word
+            live_container.metric("**Fused Model**", fused_label, f"{fused_score:.1%} Confidence")
+            
+            live_container.divider()
+            m_col1, m_col2, m_col3 = live_container.columns(3)
+            with m_col1:
+                st.markdown("**PANN**")
+                pann_label = pann_pred.get("top_label", "N/A"); pann_score = pann_pred.get("top_score", 0)
+                # FIX 1 & 2: Format as percentage and use full "Confidence" word
+                st.write(f"{pann_label}"); st.caption(f"({pann_score:.1%} Confidence)")
+            with m_col2:
+                st.markdown("**VGGish**")
+                vgg_label = vgg_pred.get("top_label", "N/A"); vgg_score = vgg_pred.get("top_score", 0)
+                # FIX 1 & 2: Format as percentage and use full "Confidence" word
+                st.write(f"{vgg_label}"); st.caption(f"({vgg_score:.1%} Confidence)")
+            with m_col3:
+                st.markdown("**AST**")
+                ast_label = ast_pred.get("top_label", "N/A"); ast_score = ast_pred.get("top_score", 0)
+                # FIX 1 & 2: Format as percentage and use full "Confidence" word
+                st.write(f"{ast_label}"); st.caption(f"({ast_score:.1%} Confidence)")
+
+    with col_alerts:
+        # --- 7. ALERT PROCESSING ---
+        try:
+            with open(LOG_FILE, 'r') as f:
+                f.seek(st.session_state.file_pos)
+                new_lines = f.readlines()
+                st.session_state.file_pos = f.tell()
+        except FileNotFoundError:
+            new_lines = []
+
+        newly_created_alerts = []
+        for line in new_lines:
+            try:
+                alert_data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if not st.session_state.processing_file:
+                st.session_state.last_prediction = alert_data
+                
+            new_alert = parse_prediction_to_alert(alert_data)
+            
+            if new_alert:
+                group_id = new_alert['id']
+                found_index = -1
+                for i, alert in enumerate(st.session_state.alerts):
+                    if alert['id'] == group_id:
+                        found_index = i
+                        break
+                
+                if found_index != -1:
+                    st.session_state.alerts[found_index] = new_alert
+                else:
+                    st.session_state.alerts.append(new_alert)
+                
+                newly_created_alerts.append(new_alert)
+
+        # --- 7a. Show Persistent Critical Dialog ---
+        alert_to_show = None
+        for alert in st.session_state.alerts:
+            if alert['tier'] == 3 and alert['id'] not in st.session_state.acknowledged_ids:
+                alert_to_show = alert
+                break
+
+        if alert_to_show and not st.session_state.processing_file:
+            show_critical_alert_dialog(alert_to_show)
+
+        # --- 7b. Show Toasts for *new* non-critical alerts ---
+        newly_created_alerts.sort(key=lambda x: x.get('tier', 0))
+        for alert in newly_created_alerts:
+            if alert['id'] in st.session_state.acknowledged_ids or alert['tier'] == 3:
+                continue
+
+            if alert['tier'] == 2:
+                st.toast(f"⚠️ Warning: {alert['type']} detected!", icon="⚠️")
         
-        m_col1.metric(
-            label="**Fused Model**", 
-            value=fused_pred.get("top_label", "N/A"),
-            delta=f"{fused_pred.get('top_score', 0):.2%} Conf."
-        )
-        m_col2.metric(
-            label="PANN", 
-            value=pann_pred.get("top_label", "N/A"),
-            delta=f"{pann_pred.get('top_score', 0):.2%} Conf."
-        )
-        m_col3.metric(
-            label="VGGish", 
-            value=vgg_pred.get("top_label", "N/A"),
-            delta=f"{vgg_pred.get('top_score', 0):.2%} Conf."
-        )
-        # --- THIS IS THE SECOND FIX ---
-        m_col4.metric(
-            label="AST", 
-            value=ast_pred.get("top_label", "N/A"),
-            delta=f"{ast_pred.get('top_score', 0):.2%} Conf."
-        )
+        # --- 8. TIERED ALERT DISPLAY ---
+        all_active = st.session_state.alerts
+        all_active.sort(key=lambda x: x.get('time', 0), reverse=True)
+        st.subheader(f"🚨 Active Alerts ({len(all_active)})")
 
+        tier3_alerts = [a for a in all_active if a.get('tier') == 3]
+        tier2_alerts = [a for a in all_active if a.get('tier') == 2]
+        tier1_alerts = [a for a in all_active if a.get('tier') == 1]
+        active_profile = st.session_state.active_profile
 
-# --- ALERT PROCESSING SECTION (Reading from log) ---
-try:
-    with open(LOG_FILE, 'r') as f:
-        f.seek(st.session_state.file_pos)
-        new_lines = f.readlines()
-        st.session_state.file_pos = f.tell()
-except FileNotFoundError:
-    new_lines = [] 
+        # FIX 3: Added emojis and descriptions to captions
+        with st.expander(f"🚨 Tier 3: Critical ({len(tier3_alerts)})", expanded=True):
+            st.caption("📱 **Action:** Strong Vibration, Phone Flash & Smartwatch Alert 🚨")
+            if not tier3_alerts: st.write("✅ No critical alerts.")
+            else:
+                for alert in tier3_alerts: display_alert_card(alert)
+        
+        if active_profile in ['Normal', 'Sleep']:
+            with st.expander(f"⚠️ Tier 2: Warning ({len(tier2_alerts)})", expanded=True):
+                st.caption("⌚️ **Action:** Vibration & Smartwatch Alert")
+                if not tier2_alerts: st.write("✅ No warning alerts.")
+                else:
+                    for alert in tier2_alerts: display_alert_card(alert)
+        
+        if active_profile == 'Normal':
+            with st.expander(f"ℹ️ Tier 1: Info ({len(tier1_alerts)})", expanded=True):
+                st.caption("ℹ️ **Action:** Standard Phone Notification")
+                if not tier1_alerts: st.write("✅ No info alerts.")
+                else:
+                    for alert in tier1_alerts: display_alert_card(alert)
+
+with tab_finetune:
+    st.subheader("Submit Audio for Model Improvement")
+    st.info("Have an audio clip that wasn't detected correctly? You can help us improve the model by submitting it here with the correct label. Our team will review it for inclusion in future model training.")
     
-for line in new_lines:
+    with st.form("finetune_form"):
+        new_audio_file = st.file_uploader(
+            "Upload Audio File",
+            type=["wav", "mp3", "flac"]
+        )
+        new_label = st.text_input(
+            "Enter Correct Label",
+            placeholder="e.g., 'Dog barking', 'Specific type of alarm'"
+        )
+        submitted = st.form_submit_button("Submit for Processing")
+        
+        if submitted:
+            if not new_audio_file or not new_label.strip():
+                st.error("Please provide both an audio file and a label.")
+            else:
+                st.success("Thank you! We are uploading the audio clip and we will proceed to finetune with the new labels.")
+
+# --- 9. AUTO-REFRESH LOOP ---
+# This loop now *only* runs if the pipeline is active
+# AND the critical dialog is NOT open. This pauses the loop.
+if st.session_state.pipeline_running and not st.session_state.get('critical_dialog_open', False):
     try:
-        alert_data = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    
-    # Update live prediction state
-    st.session_state.last_prediction = alert_data
-
-    # --- Business Logic: Translate ML output to a UI alert ---
-    pred = alert_data.get("Fused")
-    if not pred:
-        pred = alert_data.get("VGGish", alert_data.get("PANN", {}))
-
-    label = pred.get("top_label", "Unknown")
-    score = pred.get("top_score", 0)
-    alert_id = f"{alert_data.get('time_start', time.time())}-{label}"
-    
-    if alert_id in st.session_state.acknowledged_ids:
-        continue  
-    
-    # --- Customize Your Alert Rules Here ---
-    tier = 0 # Default: 0 = No alert
-    message = f"{label.capitalize()} detected (Score: {score:.2f})"
-    
-    critical_sounds = ["screaming", "baby cry", "cry", "glass break", "gunshot", "siren"]
-    warning_sounds = ["dog bark", "cough", "snoring", "alarm", "smoke"]
-    info_sounds = ["speech", "music", "typing"] # Example
-    
-    normalized_label = label.lower()
-    
-    if any(sound in normalized_label for sound in critical_sounds) and score > 0.5:
-        tier = 3
-    elif any(sound in normalized_label for sound in warning_sounds) and score > 0.4:
-        tier = 2
-    elif any(sound in normalized_label for sound in info_sounds) and score > 0.6:
-        tier = 1
-    
-    # Only create an alert if tier is 1 or higher
-    if tier > 0:
-        new_alert = {
-            "id": alert_id,
-            "tier": tier,
-            "type": label.capitalize(),
-            "location": "Main Room", 
-            "message": message,
-            "time": alert_data.get('time_start', time.time()) # Store time for sorting
-        }
-        
-        # Avoid adding duplicates
-        if not any(a['id'] == new_alert['id'] for a in st.session_state.alerts):
-             st.session_state.alerts.append(new_alert)
-
-
-# --- MODIFIED: TIERED ALERT DISPLAY (in Tabs) ---
-st.subheader("🚨 Active Alerts")
-
-# Filter and sort alerts
-all_active = [a for a in st.session_state.alerts if a['id'] not in st.session_state.acknowledged_ids]
-all_active.sort(key=lambda x: x.get('time', 0), reverse=True) 
-
-tier3_alerts = [a for a in all_active if a.get('tier') == 3]
-tier2_alerts = [a for a in all_active if a.get('tier') == 2]
-tier1_alerts = [a for a in all_active if a.get('tier') == 1]
-
-# Create tabs
-tab1, tab2, tab3 = st.tabs([
-    f"🚨 Tier 3: Critical ({len(tier3_alerts)})", 
-    f"⚠️ Tier 2: Warning ({len(tier2_alerts)})", 
-    f"ℹ️ Tier 1: Info ({len(tier1_alerts)})"
-])
-
-# Helper function to display an alert card
-def display_alert(alert):
-    with st.container(border=True):
-        alert_text = f"**{alert['type']} Alert:** {alert['message']} at *{alert['location']}*"
-        st.markdown(alert_text)
-        
-        devices = "⌚ Watch" # Default
-        if alert['tier'] == 2:
-            devices = "📳 Phone, ⌚ Watch"
-        elif alert['tier'] == 3:
-            devices = "🔴 LED Flash, 📳 Phone, ⌚ Watch"
-        st.write(f"Devices: {devices}")
-        
-        if st.button("Acknowledge", key=f"ack_{alert['id']}"):
-            st.session_state.acknowledged_ids.add(alert['id'])
-            st.rerun()
-
-# Populate Tier 3 Tab
-with tab1:
-    if not tier3_alerts:
-        st.write("✅ No critical alerts.")
-    for alert in tier3_alerts:
-        display_alert(alert)
-
-# Populate Tier 2 Tab
-with tab2:
-    if not tier2_alerts:
-        st.write("✅ No warning alerts.")
-    for alert in tier2_alerts:
-        display_alert(alert)
-
-# Populate Tier 1 Tab
-with tab3:
-    if not tier1_alerts:
-        st.write("✅ No info alerts.")
-    for alert in tier1_alerts:
-        display_alert(alert)
-
-
-# --- AUTO-REFRESH LOOP ---
-if st.session_state.pipeline_running:
-    try:
-        time.sleep(2) # Refresh interval in seconds
-        st.rerun() 
+        time.sleep(2.5) # Your requested 2.5s loop
+        st.rerun()
     except Exception as e:
         pass
