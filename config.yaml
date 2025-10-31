@@ -16,5 +16,5 @@ local_models:
 
 custom_model:
   enable: true
-  mlp_ckpt: ast/pretrained_models/VGGish_ckpt_epoch_88.pt
-  labels_json: data/custom_label.json
+  full_ckpt: ./ast/pretrained_models/finetuned_vggish.pt
+  label_tiers: label_tiers.json
