@@ -234,17 +234,17 @@ def worker_task(item, args, mid_to_name: Dict[str, str], keep_mids: Set[str], ca
 def main():
     ap = argparse.ArgumentParser(description='Download AudioSet segments to per-label folders')
     ap.add_argument('--segments_csv',
-                    default=r"D:\NUS_1\CS5647_Sound_and_Music\smc-project\data\balanced_train_segments.csv",
+                    default=r".\data\balanced_train_segments.csv",
                     help='balanced_train_segments.csv or eval_segments.csv')
     ap.add_argument('--label_csv',
-                    default=r"D:\NUS_1\CS5647_Sound_and_Music\smc-project\ast\egs\audioset\data\class_labels_indices.csv",
+                    default=r".\ast\egs\audioset\class_labels_indices.csv",
                     help='class_labels_indices.csv')
     ap.add_argument('--out_dir', default="raw_wav", help='Output root directory')
     ap.add_argument('--keep_indices', default=None, help='Comma-separated class indices to keep')
-    ap.add_argument('--keep_names', nargs='*', default=["Alarm", "Fire alarm", "Doorbell", "Knock", "Baby cry, infant cry", "Telephone bell ringing", "Vehicle horn, car horn, honking", "Civil defense siren"],
+    ap.add_argument('--keep_names', nargs='*', default=["Car","Vehicle"],
                     help='Display names to keep as a list. Example: --keep_names "Baby cry" "Doorbell" or --keep_names "[\"Baby cry\", \"Doorbell\"]"')
     ap.add_argument('--sr', type=int, default=16000)
-    ap.add_argument('--max_per_label', type=int, default=0, help='0 for no limit')
+    ap.add_argument('--max_per_label', type=int, default=30, help='0 for no limit')
     ap.add_argument('--workers', type=int, default=1)
     ap.add_argument('--skip_existing', default=True)
     ap.add_argument('--cache_dir', default='downloads_cache')
