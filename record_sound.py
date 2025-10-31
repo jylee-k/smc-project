@@ -148,7 +148,7 @@ class ChunkRecorder:
             channels=self.channels,
             dtype="float32",
             blocksize=self.blocksize,
-            callback=self._callback,
+            callback=self._callback, # --- THIS IS THE FIX ---
         )
         self._stream.start()
         print(f"[ChunkRecorder] Started @ {self.sr} Hz, chunk={self.chunk_size_sec}s")
@@ -168,76 +168,77 @@ class ChunkRecorder:
             self._worker = None
         print(f"[ChunkRecorder] Stopped. Total chunks: {len(self.chunks)}")
         
-# -------------------------------
-# Rec button Tkinter interface
-# -------------------------------
-import tkinter as tk
-from tkinter import messagebox
-from realtime_solo import RealTimeSolo
-class RecordButton:
-    def __init__(self, master, sr=16000, channels=1, chunk_size_sec=2.0):
-        self.master = master
-        self.master.title("Recorder")
-        self.sr = sr
-        self.channels = channels
-        self.chunk_size_sec = float(chunk_size_sec)
-
-        self.recorder = None
-        self.is_recording = False
-
-        self.btn = tk.Button(master, text="Start", width=18, command=self.toggle)
-        self.btn.pack(padx=20, pady=20)
-
-        self.info = tk.Label(master, text=f"SR: {sr} Hz  |  Chunk: {chunk_size_sec}s")
-        self.info.pack(pady=(0, 10))
-
-        self.save_var = tk.IntVar(value=0)
-        self.chk = tk.Checkbutton(master, text="Save chunks as WAV on stop", variable=self.save_var)
-        self.chk.pack()
-
-        self.solo = RealTimeSolo("config.yaml")
-        self.solo.start_session()
-
-    def toggle(self):
-        if not self.is_recording:
-            # Start
-            try:
-                self.recorder = ChunkRecorder(sr=self.sr, channels=self.channels, chunk_size_sec=self.chunk_size_sec, on_chunk=self.handle_chunk)
-                self.recorder.start()
-                self.is_recording = True
-                self.btn.config(text="Stop")
-            except Exception as e:
-                messagebox.showerror("Error", str(e))
-        else:
-            # Stop
-            try:
-                if self.recorder:
-                    self.recorder.stop()
-            finally:
-                self.is_recording = False
-                self.btn.config(text="Start")
-                chunks = self.recorder.chunks if self.recorder else []
-                total_sec = sum(len(c) for c in chunks) / float(self.sr) if chunks else 0.0
-                print(f"[UI] Got {len(chunks)} chunks, total {total_sec:.2f}s")
-
-                if self.save_var.get() and chunks:
-                    # Save each chunk as output_chunkXX.wav using your current writer style
-                    for i, c in enumerate(chunks):
-                        fname = f"output_chunk{i+1:02d}.wav"
-                        write(fname, self.sr, c)  # uses scipy.io.wavfile.write you already imported
-                        print(f"Saved {fname} ({len(c)/self.sr:.2f}s)")
-
-                messagebox.showinfo("Done", f"Recorded {len(chunks)} chunks.\nCheck console for details.")
-
-    def handle_chunk(self, chunk):
-        self.solo.process_chunk(chunk, chunk_sr=16000)
-
-def run_record_button_ui(sr=16000, channels=1, chunk_size_sec=2.0):
-    root = tk.Tk()
-    app = RecordButton(root, sr=sr, channels=channels, chunk_size_sec=chunk_size_sec)
-    root.mainloop()
+# --- All Tkinter code is correctly inside this block ---
+if __name__ == "__main__":
+    # -------------------------------
+    # Rec button Tkinter interface
+    # -------------------------------
+    import tkinter as tk
+    from tkinter import messagebox
+    from realtime_solo import RealTimeSolo
     
-# Launch minimal GUI (Start/Stop). Optional: check "Save chunks as WAV on stop".
-run_record_button_ui(sr=16000, channels=1, chunk_size_sec=2.0)
+    class RecordButton:
+        def __init__(self, master, sr=16000, channels=1, chunk_size_sec=2.0):
+            self.master = master
+            self.master.title("Recorder")
+            self.sr = sr
+            self.channels = channels
+            self.chunk_size_sec = float(chunk_size_sec)
 
+            self.recorder = None
+            self.is_recording = False
 
+            self.btn = tk.Button(master, text="Start", width=18, command=self.toggle)
+            self.btn.pack(padx=20, pady=20)
+
+            self.info = tk.Label(master, text=f"SR: {sr} Hz  |  Chunk: {chunk_size_sec}s")
+            self.info.pack(pady=(0, 10))
+
+            self.save_var = tk.IntVar(value=0)
+            self.chk = tk.Checkbutton(master, text="Save chunks as WAV on stop", variable=self.save_var)
+            self.chk.pack()
+
+            self.solo = RealTimeSolo("config.yaml")
+            self.solo.start_session()
+
+        def toggle(self):
+            if not self.is_recording:
+                # Start
+                try:
+                    self.recorder = ChunkRecorder(sr=self.sr, channels=self.channels, chunk_size_sec=self.chunk_size_sec, on_chunk=self.handle_chunk)
+                    self.recorder.start()
+                    self.is_recording = True
+                    self.btn.config(text="Stop")
+                except Exception as e:
+                    messagebox.showerror("Error", str(e))
+            else:
+                # Stop
+                try:
+                    if self.recorder:
+                        self.recorder.stop()
+                finally:
+                    self.is_recording = False
+                    self.btn.config(text="Start")
+                    chunks = self.recorder.chunks if self.recorder else []
+                    total_sec = sum(len(c) for c in chunks) / float(self.sr) if chunks else 0.0
+                    print(f"[UI] Got {len(chunks)} chunks, total {total_sec:.2f}s")
+
+                    if self.save_var.get() and chunks:
+                        # Save each chunk as output_chunkXX.wav using your current writer style
+                        for i, c in enumerate(chunks):
+                            fname = f"output_chunk{i+1:02d}.wav"
+                            write(fname, self.sr, c)  # uses scipy.io.wavfile.write you already imported
+                            print(f"Saved {fname} ({len(c)/self.sr:.2f}s)")
+
+                    messagebox.showinfo("Done", f"Recorded {len(chunks)} chunks.\nCheck console for details.")
+
+        def handle_chunk(self, chunk):
+            self.solo.process_chunk(chunk, chunk_sr=16000)
+
+    def run_record_button_ui(sr=16000, channels=1, chunk_size_sec=2.0):
+        root = tk.Tk()
+        app = RecordButton(root, sr=sr, channels=channels, chunk_size_sec=chunk_size_sec)
+        root.mainloop()
+        
+    # Launch minimal GUI (Start/Stop). Optional: check "Save chunks as WAV on stop".
+    run_record_button_ui(sr=16000, channels=1, chunk_size_sec=2.0)
