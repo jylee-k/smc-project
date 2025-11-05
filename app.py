@@ -12,6 +12,9 @@ import numpy as np
 from record_sound import ChunkRecorder
 from realtime_solo import RealTimeSolo
 
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
+
 st.set_page_config(
     page_title="SilentSignals",
     page_icon="🚨",
