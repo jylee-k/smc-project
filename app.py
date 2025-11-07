@@ -268,7 +268,7 @@ def display_alert_card(alert):
     is_acknowledged = alert['id'] in st.session_state.acknowledged_ids
 
     with st.container(border=True):
-        c1, c2, c3 = st.columns([1, 6, 2], vertical_alignment="center")
+        c1, c2, c3 = st.columns([1, 5, 3], vertical_alignment="center")
 
         with c1:
             if is_acknowledged:
