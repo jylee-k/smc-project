@@ -553,7 +553,7 @@ with tab_dashboard:
 
 with tab_finetune:
     st.subheader("Submit Audio for Model Improvement")
-    st.info("Have an audio clip that wasn't detected correctly? You can help us improve the model by submitting it here with the correct label. Our team will review it for inclusion in future model training.")
+    st.info("Have an audio clip that wasn't detected correctly? You can help us improve the model by submitting it here with the correct label.")
     
     with st.form("finetune_form"):
         new_audio_file = st.file_uploader(
@@ -570,7 +570,7 @@ with tab_finetune:
             if not new_audio_file or not new_label.strip():
                 st.error("Please provide both an audio file and a label.")
             else:
-                st.success("Thank you! We are uploading the audio clip and we will proceed to finetune with the new labels.")
+                st.success("Thank you! The audio clip will proceed to finetune with the new labels.")
 
 # --- 9. AUTO-REFRESH LOOP ---
 if st.session_state.pipeline_running and not st.session_state.get('critical_dialog_open', False):
