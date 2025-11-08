@@ -33,7 +33,6 @@ class WaveDataset(Dataset):
         import librosa
         self.data_root = data_root
         self.labels = labels
-        # map display name -> original 0..526 AudioSet index
         self.name_to_full_index = name_to_full_index
         self.sr = int(sr)
         self.samples = int(round(seconds * self.sr))
@@ -41,12 +40,10 @@ class WaveDataset(Dataset):
 
         items: List[Tuple[str, int]] = []
         for name in labels:
-            # prefer underscore folder name
             cand = os.path.join(data_root, _slugify(name))
             if os.path.isdir(cand):
                 paths = list_audio_files(cand)
             else:
-                # try simple space->underscore
                 alt = os.path.join(data_root, name.replace(',', '').replace('  ', ' ').replace(' ', '_'))
                 paths = list_audio_files(alt) if os.path.isdir(alt) else []
             for p in paths:
@@ -63,7 +60,6 @@ class WaveDataset(Dataset):
     def __getitem__(self, idx: int):
         path, y = self.items[idx]
         wav, sr = self.librosa.load(path, sr=self.sr, mono=True)
-        # center-crop or pad to fixed length
         n = wav.shape[0]
         if n < self.samples:
             pad = np.zeros((self.samples - n,), dtype=np.float32)
@@ -78,7 +74,6 @@ class WaveDataset(Dataset):
 
 
 def build_panns_model(checkpoint: str, device: str = 'cpu') -> nn.Module:
-    # Try to import Cnn14 from panns_inference
     try:
         from panns_inference.models import Cnn14_DecisionLevelMax
         model = Cnn14_DecisionLevelMax(sample_rate=32000, window_size=1024, hop_size=320,
@@ -86,12 +81,13 @@ def build_panns_model(checkpoint: str, device: str = 'cpu') -> nn.Module:
     except Exception as e:
         raise RuntimeError(f"Failed to import PANNS Cnn14: {e}")
 
-    sd = torch.load(checkpoint, map_location=device)
-    if isinstance(sd, dict) and 'model' in sd:
-        sd = sd['model']
-    model.load_state_dict(sd, strict=False)
-
-    # Keep original 527-dim head; fine-tune with subset targets mapped to 0..526
+    try:
+        sd = torch.load(checkpoint, map_location=device)
+        if isinstance(sd, dict) and 'model' in sd:
+            sd = sd['model']
+        model.load_state_dict(sd, strict=False)
+    except Exception as e:
+        pass
     return model
 
 
@@ -113,28 +109,28 @@ def train_one_epoch(model, loader, device, optimizer, criterion):
         y_idx = y_idx.to(device)
         B = x.size(0)
         optimizer.zero_grad(set_to_none=True)
-        y = torch.zeros(B, 527, device=device, dtype=torch.float32)
-        y.scatter_(1, y_idx.unsqueeze(1), 1.0)  # (B, C)
-        # Cnn14 in panns expects [B, data_length] waveform
-        out = model(x, mixup_lambda = None)
-        logits = out['clipwise_output']
-        bce_elem = F.binary_cross_entropy(logits, y, reduction='none')
+        out = model(x, mixup_lambda=None)
+        probs = out['clipwise_output']
+        C = probs.size(1)
+        y = torch.zeros(B, C, device=device, dtype=torch.float32)
+        y.scatter_(1, y_idx.unsqueeze(1), 1.0)
+        bce_elem = F.binary_cross_entropy(probs, y, reduction='none')
         loss = bce_elem.mean()
         loss.backward()
         optimizer.step()
         total_loss += loss.item() * B
         total_n += B
-        pred = logits.argmax(dim=1)
+        pred = probs.argmax(dim=1)
         correct += (pred == y_idx).sum().item()
     return {"loss": total_loss / max(1, total_n), "acc": correct / max(1, total_n)}
 
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Fine-tune PANNS Cnn14 on custom labels (single-label)')
+    ap = argparse.ArgumentParser(description='Fine-tune PANNS Cnn14 on custom labels')
     ap.add_argument('--labels_json', default='data/custom_label.json')
-    ap.add_argument('--data_root', default='raw_wav')
-    ap.add_argument('--checkpoint', default='ast/pretrained_models/Cnn14_DecisionLevelMax.pth')
+    ap.add_argument('--data_root', default='dataset')
+    ap.add_argument('--checkpoint', default='pretrained_model/Cnn14_DecisionLevelMax.pth')
     ap.add_argument('--label_csv', default='ast/egs/audioset/class_labels_indices.csv', help='AudioSet class_labels_indices.csv for name→index mapping')
     ap.add_argument('--seconds', type=float, default=10.0)
     ap.add_argument('--batch_size', type=int, default=16)
@@ -151,7 +147,6 @@ def main():
 
     with open(args.labels_json, 'r', encoding='utf-8') as f:
         labels: List[str] = json.load(f)
-    # map display name -> full AudioSet index (0..526)
     name_to_full_index: Dict[str, int] = {}
     import csv
     with open(args.label_csv, 'r', encoding='utf-8') as f:
@@ -164,7 +159,6 @@ def main():
             name_to_full_index[disp] = idx
         except Exception:
             continue
-    # ensure all custom labels exist in mapping
     missing = [n for n in labels if n not in name_to_full_index]
     if missing:
         raise SystemExit(f"Labels not found in label_csv: {missing}")
@@ -181,14 +175,12 @@ def main():
     if args.unfreeze == 'head':
         for p in model.parameters():
             p.requires_grad = False
-        # unfreeze last linear
         head = None
         for name in ['fc_audioset', 'clipwise_fc', 'fc']:
             if hasattr(model, name) and isinstance(getattr(model, name), nn.Linear):
                 head = getattr(model, name)
                 break
         if head is None:
-            # fallback: last linear
             for m in model.modules():
                 if isinstance(m, nn.Linear):
                     head = m

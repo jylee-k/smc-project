@@ -30,7 +30,7 @@ def list_audio_files(root: str) -> List[str]:
 
 class RawWaveDataset(Dataset):
     def __init__(self, data_root: str, labels: List[str], name_to_full_index: Dict[str, int]):
-        import torchaudio  # noqa: F401 (ensure availability)
+        import torchaudio
         self.data_root = data_root
         self.labels = labels
         self.name_to_full_index = name_to_full_index
@@ -130,7 +130,6 @@ def train_one_epoch(model, loader, device, optimizer):
         if batch is None:
             continue
         waves, srs, ys = batch
-        # Build patches for the whole batch and aggregate per sample
         patch_list: List[torch.Tensor] = []
         counts: List[int] = []
         kept_y: List[int] = []
@@ -146,14 +145,12 @@ def train_one_epoch(model, loader, device, optimizer):
             patch_list.append(p)
         if not patch_list:
             continue
-        patches = torch.cat(patch_list, dim=0)  # [sum(n_i), 1, 96, 64]
+        patches = torch.cat(patch_list, dim=0)
 
         optimizer.zero_grad(set_to_none=True)
-        logits_p = model(patches.to(device))  # [sum(n_i), 527]
+        logits_p = model(patches.to(device))
         if isinstance(logits_p, (list, tuple)):
             logits_p = logits_p[0]
-
-        # Average over patches per sample to get clip-level logits
         start = 0
         clip_logits = []
         for i, n_i in enumerate(counts):
@@ -178,9 +175,9 @@ def train_one_epoch(model, loader, device, optimizer):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Fine-tune VGGish classifier (with head) on raw_wav using custom labels while keeping 527-class output')
+    ap = argparse.ArgumentParser(description='Fine-tune VGGish classifier')
     ap.add_argument('--labels_json', default='data/custom_label.json')
-    ap.add_argument('--data_root', default='raw_wav')
+    ap.add_argument('--data_root', default='dataset')
     ap.add_argument('--label_csv', default='ast/egs/audioset/class_labels_indices.csv', help='AudioSet class_labels_indices.csv for name→index mapping')
     ap.add_argument('--batch_size', type=int, default=8)
     ap.add_argument('--epochs', type=int, default=10)
@@ -196,7 +193,6 @@ def main():
     with open(args.labels_json, 'r', encoding='utf-8') as f:
         labels: List[str] = json.load(f)
 
-    # map display name -> full AudioSet index (0..526)
     name_to_full_index: Dict[str, int] = {}
     with open(args.label_csv, 'r', encoding='utf-8', newline='') as f:
         reader = csv.reader(f)
@@ -208,8 +204,6 @@ def main():
             name_to_full_index[disp] = idx
         except Exception:
             continue
-
-    # ensure all custom labels exist in mapping
     missing = [n for n in labels if n not in name_to_full_index]
     if missing:
         raise SystemExit(f"Labels not found in label_csv: {missing}")
