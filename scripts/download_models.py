@@ -13,8 +13,10 @@ def download_from_drive(file_id, save_dir, filename):
 if __name__ == "__main__":
     save_dir = r"./pretrained_model"
     audio_dir = r'./user_uploads'
+    dataset_dir = r'./dataset'
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(audio_dir, exist_ok=True)
+    os.makedirs(dataset_dir, exist_ok=True)
     files = [
         ("1J02zklnEsizdxiasg6zbVmEftz9BYvzQ", "audio_mdl.pth"),
         ("1gSRRh-HpDE6zCN-IF0ZyKvfG4cb_ieBG", "finetuned_panns.pth"),

@@ -12,6 +12,11 @@ pip install -r requirements.txt
 python scripts/download_models.py
 ```
 
+## Audioset download
+```bash
+python scripts/download_audioset_wavs.py
+```
+
 ## fine-tuning
 ```bash
 python scripts/finetune_panns.py
