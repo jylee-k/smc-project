@@ -34,7 +34,7 @@ def _derive_label_from_file(path: str) -> str:
 def _load_user_audio(user_dir: str) -> Tuple[str, List[str]]:
     paths = list_audio_files(user_dir)
     if not paths:
-        raise SystemExit(f"No audio found in '{user_dir}'. Please place a file there.")
+        raise SystemExit(f"No audio found in '{user_dir}.")
     first = paths[0]
     label = _derive_label_from_file(first)
     return label, [first]

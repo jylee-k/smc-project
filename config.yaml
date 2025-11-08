@@ -16,5 +16,5 @@ local_models:
 
 custom_model:
   enable: true
-  full_ckpt: ./ast/pretrained_models/finetuned_vggish.pt
+  full_ckpt: ./pretrained_model/finetuned_vggish.pt
   label_tiers: label_tiers.json
