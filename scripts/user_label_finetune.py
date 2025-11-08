@@ -126,7 +126,7 @@ def _expand_and_finetune_vggish(user_label: str, audio_paths: List[str], save_di
 
     optimizer = torch.optim.AdamW(new_linear.parameters(), lr=lr)
     model.train()
-    new_idx = out_f_old  # the added class index
+    new_idx = out_f_old
     history = []
     ds = UploadedWaveDataset(audio_paths, new_idx)
     loader = DataLoader(ds, batch_size=8, shuffle=True, num_workers=0, pin_memory=True, collate_fn=vgg_collate)
@@ -135,7 +135,6 @@ def _expand_and_finetune_vggish(user_label: str, audio_paths: List[str], save_di
         tr = vgg_train_one_epoch(model, loader, device, optimizer)
         history.append({"epoch": ep, **tr, "seconds": round(time.time() - t0, 2)})
 
-    # Save expanded model
     sd = model.state_dict()
     torch.save({"model": sd, "model_state": sd, "num_classes": out_f_new, "new_label": user_label, "history": history},
                os.path.join(save_dir, 'vggish_expanded.pt'))
@@ -151,13 +150,11 @@ def _build_panns(classes_num: int, device: str):
 
 def _expand_and_finetune_panns(user_label: str, audio_paths: List[str], save_dir: str,
                                epochs: int = 10, lr: float = 1e-4) -> None:
-    """Expand PANNs head by 1 unit and fine-tune the head only."""
     import librosa
     from scripts.finetune_panns import train_one_epoch as panns_train_one_epoch
     device = _device()
     _ensure_dir(save_dir)
 
-    # Load a 527-class model to grab head weights
     base_model = _build_panns(527, device)
     ckpt_candidates = [
         'pretrained_model/finetuned_panns.pth',
@@ -252,8 +249,6 @@ def _expand_and_finetune_panns(user_label: str, audio_paths: List[str], save_dir
     with open(os.path.join(save_dir, 'panns_meta.json'), 'w', encoding='utf-8') as f:
         json.dump({"num_classes": 528, "new_index": new_idx, "new_label": user_label}, f, ensure_ascii=False, indent=2)
 
-
-# ---------------- AST ----------------
 def _extract_ast_fbank(wave: np.ndarray, sr: int, target_len: int = 1024, mel_bins: int = 128) -> torch.Tensor:
     import librosa
     import torch

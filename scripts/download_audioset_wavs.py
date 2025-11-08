@@ -48,7 +48,6 @@ def parse_keep_list(keep_indices: Optional[str], keep_names: Optional[List[str]]
                 keep_names_list.append(name)
                 keep_mids_list.append(name_to_mid[name])
     elif keep_names:
-        # keep_names is now a list; also support a single JSON-array string
         names: List[str] = []
         if isinstance(keep_names, (list, tuple)):
             for it in keep_names:
@@ -121,10 +120,6 @@ def ensure_deps():
 
 
 def download_video_audio(ytid: str, tmp_dir: str, *, ua: Optional[str] = None, cookiefile: Optional[str] = None) -> Optional[str]:
-    """Download best audio for a YouTube video using yt-dlp with 403 workarounds.
-    Tries default client, then Android/IOS/TV clients to mitigate 403 Forbidden.
-    Return path to downloaded file or None on failure.
-    """
     import yt_dlp
     from yt_dlp.utils import DownloadError
 
@@ -202,7 +197,7 @@ def worker_task(item, args, mid_to_name: Dict[str, str], keep_mids: Set[str], ca
         return {"status": "skip", "reason": "no_target_label", "ytid": ytid}
 
     os.makedirs(cache_dir, exist_ok=True)
-    src_path = download_video_audio(ytid, cache_dir, ua=getattr(args, 'ua', None), cookiefile=getattr(args, 'cookies', None))
+    src_path = download_video_audio(ytid, cache_dir)
     if not src_path:
         return {"status": "fail", "reason": "download", "ytid": ytid}
 
@@ -239,7 +234,7 @@ def main():
     ap.add_argument('--label_csv',
                     default=r".\ast\egs\audioset\class_labels_indices.csv",
                     help='class_labels_indices.csv')
-    ap.add_argument('--out_dir', default="raw_wav", help='Output root directory')
+    ap.add_argument('--out_dir', default="dataset", help='Output root directory')
     ap.add_argument('--keep_indices', default=None, help='Comma-separated class indices to keep')
     ap.add_argument('--keep_names', nargs='*', default=["Car","Vehicle"],
                     help='Display names to keep as a list. Example: --keep_names "Baby cry" "Doorbell" or --keep_names "[\"Baby cry\", \"Doorbell\"]"')
@@ -248,9 +243,6 @@ def main():
     ap.add_argument('--workers', type=int, default=1)
     ap.add_argument('--skip_existing', default=True)
     ap.add_argument('--cache_dir', default='downloads_cache')
-    # 403 mitigation options
-    ap.add_argument('--ua', default=None, help='Override User-Agent for YouTube requests')
-    ap.add_argument('--cookies', default=None, help='Path to a Netscape cookies.txt file for YouTube (optional)')
     args = ap.parse_args()
 
     ensure_deps()
