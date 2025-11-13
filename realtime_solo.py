@@ -25,7 +25,10 @@ def to_pcm16(w):
 class LocalPANN:
     def __init__(self, device="cuda", min_seconds=1.0):
         self.device = device if torch.cuda.is_available() and device.startswith("cuda") else "cpu"
-        self.model = SoundEventDetection(checkpoint_path='pretrained_model/finetuned_panns.pth', device=self.device)
+        CKPT_PATH = 'pretrained_model/finetuned_panns.pth'
+        if not os.path.exists(CKPT_PATH):
+            raise RuntimeError(f"PANN model not found at '{CKPT_PATH}'. Please run 'python scripts/download_models.py'.")
+        self.model = SoundEventDetection(checkpoint_path=CKPT_PATH, device=self.device)
         self.min_seconds = float(min_seconds)
         try:
             self.labels = self.model.labels
@@ -87,9 +90,9 @@ class LocalVGGish:
             self.labels = self.full_labels
 
         self.model = vggish.get_vggish(with_classifier=True, pretrained=True).to(self.device)
-        full_ckpt = self.cfg.get('full_ckpt') or '.pretrained_model/finetuned_vggish.pt'
+        full_ckpt = self.cfg.get('full_ckpt') or './pretrained_model/finetuned_vggish.pt'
         if not full_ckpt or not os.path.exists(full_ckpt):
-            raise RuntimeError("custom_model.full_ckpt not found; please set cfg['custom_model']['full_ckpt']")
+            raise RuntimeError(f"VGGish model not found at '{full_ckpt}'. Please run 'python scripts/download_models.py'.")
         
         ckpt = torch.load(full_ckpt, map_location=self.device)
         state = ckpt.get('model_state', ckpt)
@@ -119,6 +122,8 @@ class LocalAST:
     def __init__(self, device="cuda", mel_bins: int = 128, target_length: int = 1024,
                  checkpoint_path: str = "pretrained_model/audio_mdl.pth",
                  label_csv: str = "ast/egs/audioset/class_labels_indices.csv"):
+        if not os.path.exists(checkpoint_path):
+            raise RuntimeError(f"AST model not found at '{checkpoint_path}'. Please run 'python scripts/download_models.py'.")
         repo_root = os.path.dirname(os.path.abspath(__file__))
         ast_src = os.path.join(repo_root, "ast", "src")
         if ast_src not in sys.path:

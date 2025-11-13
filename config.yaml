@@ -18,3 +18,4 @@ custom_model:
   enable: true
   full_ckpt: ./pretrained_model/finetuned_vggish.pt
   label_tiers: label_tiers.json
+  labels_json: data/custom_label.json
