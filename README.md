@@ -1,19 +1,20 @@
-# SilentSignals (smc-project)
+# CS5647 Sound & Music Computing Group Project
+## SilentSignals: Real-time Event-based Alerts
 
 ## Overview
 
 SilentSignals is a real-time sound event detection prototype. It is designed to assist the deaf and hard-of-hearing by capturing environmental sounds, processing them with a machine learning pipeline, and delivering tiered alerts based on the sound's classification.
 
-The core of this project is a 'mixture of experts' (MoE) fusion model. It processes audio in real-time by combining the predictions from three distinct models: PANN, VGGish, and AST. The fusion weights and other parameters are managed in the `config.yaml` file.
+The core of this project is a 'mixture of experts' (MoE) fusion model. It processes audio in real-time by combining the predictions from three distinct models: PANN, VGGish, and AST. The fusion weights and other parameters are managed in the `config.yaml` file. In this project, we try to address gaps highlighted by users via newly engineered features as mentioned in our presentation and report.
 
 ## Core Features
 
 * **Real-time Audio Processing**: Listens from the microphone and processes audio in continuous chunks.
 * **Tiered Alert System**: Classifies sounds into Critical, Warning, and Info categories, as defined in `label_tiers.json`.
 * **Mixture of Experts (MoE) Fusion**: Combines predictions from PANN, VGGish, and AST models for more robust detection.
-* **Customizable Profiles**: Includes 'Normal', 'Sleep', and 'DND' modes to filter alert sensitivity based on user preference.
+* **Customizable Profiles**: Includes 'Normal', 'Sleep', and 'DND' modes to filter alert sensitivity based on user preference, and allow for confidencethreshold tuning.
 * **Demo Mode**: Allows users to analyze and test pre-recorded audio files via a file uploader.
-* **Finetuning Submission**: Provides a UI to upload new audio clips to help improve the model's accuracy.
+* **Finetuning Submission**: Provides a UI to upload new audio clips to help improve user's quality of life.
 
 ## Installation
 
@@ -42,7 +43,7 @@ You can install the environment using **either** `uv` (recommended) or `conda`.
 
 1.  **Create and activate the conda environment:**
     ```bash
-    conda create -n sound_env python=3.9 -y
+    conda create -n sound_env python=3.11 -y
     conda activate sound_env
     ```
 
@@ -53,19 +54,21 @@ You can install the environment using **either** `uv` (recommended) or `conda`.
 
 ---
 
-## Required Step: Download Pre-trained Models
+## Required Step: Download Fine-tuned Models (from our google drive)
 
-The application requires pre-trained model files to run. Run the following script to download and place them in the correct directory.
+The application requires our fine-tuned model files to run. Run the following script to download and place them in the correct directory (they should be in the correct directory if you use the script).
 
 ```bash
 python scripts/download_models.py
+```
 
 Running the Application
 After installation and model download, run the Streamlit application:
 
-Bash
-
+```bash
 streamlit run app.py
+```
+
 The application will open in your browser. You can then start the microphone or upload a demo audio file.
 
 Model Finetuning (For Reference)
@@ -79,27 +82,4 @@ scripts/finetune_panns.py
 
 scripts/finetune_vggish.py
 
-scripts/download_audioset_wavs.py (Used to get the training data)
-
-Project Structure
-├── app.py                  # Main Streamlit application
-├── realtime_solo.py        # Core MoE pipeline logic
-├── record_sound.py         # Utility for real-time audio chunking
-├── config.yaml             # Configuration for models, weights, and logs
-├── label_tiers.json        # Defines alert tiers for sound labels
-├── requirements.txt        # Dependencies for pip
-├── pyproject.toml          # Dependencies for uv
-├── uv.lock                 # Locked dependencies for uv
-├── ast/                    # Source code for the AST model
-│   └── src/models/ast_models.py
-│   └── egs/audioset/class_labels_indices.csv
-├── data/                   # Data files for labels and training manifests
-│   ├── custom_label.json
-│   └── balanced_train_segments.csv
-├── scripts/                # Helper scripts
-│   ├── download_models.py
-│   ├── download_audioset_wavs.py
-│   ├── finetune_panns.py
-│   └── finetune_vggish.py
-├── pretrained_model/       # (Downloaded) Contains the .pth/.pt model files
-└── runs/                   # (Generated) Default output directory for prediction logs
+scripts/download_audioset_wavs.py (Used to get a subset of the training data)
