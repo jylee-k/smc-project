@@ -21,9 +21,9 @@ SilentSignals is a real-time sound event detection prototype built for the deaf 
     cd smc-project
     ```
 
-2.  **Set up the environment** (Python 3.9 is recommended):
+2.  **Set up the environment** (Python 3.11 is recommended):
     ```bash
-    conda create -n sound_env python=3.9 -y
+    conda create -n sound_env python=3.11 -y
     conda activate sound_env
     ```
 
