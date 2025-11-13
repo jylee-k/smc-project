@@ -76,12 +76,13 @@ The application will open in your browser. You can then start the microphone or 
 Model Finetuning (For Reference):
 The scripts used to finetune the PANN and VGGish models are included in the scripts/ directory to demonstrate the model training process.
 
-Running these scripts is not required to use the application.
-
-The relevant files are:
+The relevant files are (Running these scripts is not required to use the application.):
 
 1. scripts/finetune_panns.py
 
 2. scripts/finetune_vggish.py
 
 3. scripts/download_audioset_wavs.py (Used to get a subset of the training data)
+
+---
+Usage of LLM: We used ChatGPT5 and Gemini Pro 2.5 to do some code debugging during our project. However, most of the code debugging was done only on the frontend side (app.py) as there were latency issues with using streamlit.
