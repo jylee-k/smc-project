@@ -71,15 +71,17 @@ streamlit run app.py
 
 The application will open in your browser. You can then start the microphone or upload a demo audio file.
 
-Model Finetuning (For Reference)
+---
+
+Model Finetuning (For Reference):
 The scripts used to finetune the PANN and VGGish models are included in the scripts/ directory to demonstrate the model training process.
 
 Running these scripts is not required to use the application.
 
 The relevant files are:
 
-scripts/finetune_panns.py
+1. scripts/finetune_panns.py
 
-scripts/finetune_vggish.py
+2. scripts/finetune_vggish.py
 
-scripts/download_audioset_wavs.py (Used to get a subset of the training data)
+3. scripts/download_audioset_wavs.py (Used to get a subset of the training data)
