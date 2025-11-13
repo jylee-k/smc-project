@@ -21,18 +21,17 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- CONFIGURATION ---
+# Configuration
 LOG_FILE_PATH = "runs/stream_preds.jsonl"
 CONFIG_FILE_PATH = "config.yaml"
 os.makedirs(os.path.dirname(LOG_FILE_PATH) or ".", exist_ok=True)
 
 
-# --- 1. MODEL CACHING ---
+# Model Caching
 @st.cache_resource
 def load_pipeline():
     """
-    Loads the RealTimeSolo ML pipeline using Streamlit's caching.
-    This ensures the model is loaded only once per session.
+    Loads RealTimeSolo.py ML pipeline once only per session, then cached
     """
     print("--- LOADING ML PIPELINE ---")
     try:
@@ -47,15 +46,14 @@ def load_pipeline():
 solo_pipeline = load_pipeline()
 
 
-# --- 2. BACKGROUND THREAD TARGET ---
+# pipeline
 def pipeline_target(stop_event_flag, pipeline_instance):
     """
-    The main function executed in a separate thread for real-time audio processing.
-    It sets up the ChunkRecorder and processes audio chunks via the pipeline.
+    Sets up the ChunkRecorder and processes audio chunks via the pipeline, i.e. sets up processing thread.
 
     Args:
-        stop_event_flag (threading.Event): An event to signal when the thread should stop.
-        pipeline_instance (RealTimeSolo): The loaded ML pipeline instance.
+        stop_event_flag: An event to signal when the thread should stop.
+        pipeline_instance: The loaded ML pipeline instance.
     """
     solo = pipeline_instance
     if solo is None:
@@ -96,11 +94,10 @@ def pipeline_target(stop_event_flag, pipeline_instance):
         print(f"Error in pipeline thread: {e}")
 
 
-# --- 3. SESSION STATE ---
+# session state -> short term memory
 def initialize_session_state():
     """
     Sets up the initial Streamlit session state variables.
-    This runs once at the beginning of the session.
     """
     if not os.path.exists(LOG_FILE_PATH):
         open(LOG_FILE_PATH, 'w').close()
@@ -120,19 +117,19 @@ def initialize_session_state():
         print("Warning: Could not load custom_labels from pipeline for personalization.")
 
     # Define default tiers based on keywords
-    # --- Tier 3: Critical (Immediate Danger / High Priority) ---
+    # Tier 3
     _critical_substrings = [
         "fire alarm", "smoke detector", "siren", "screaming", "baby cry", 
         "explosion", "gunshot", "machine gun", "breaking", "shatter", "glass"
     ]
     
-    # --- Tier 2: Warning (Needs Attention) ---
+    #Tier 2:
     _warning_substrings = [
         "car alarm", "alarm clock", "shout", "crying", "slam", "ringing", 
         "ringtone", "horn", "bark", "dog", "thunder", "fireworks", "firecracker"
     ]
 
-    # --- Tier 1: Info (Contextual / Environmental) ---
+    # Tier 1
     _info_substrings = [
         "doorbell", "knock", "footsteps", "door", "keys jangling", "typing", 
         "keyboard", "dishes", "cutlery", "chopping", "frying", "microwave", 
@@ -143,7 +140,7 @@ def initialize_session_state():
         "conversation", "speech", "vehicle"
     ]
 
-    # --- Automatically build the default tier lists from the keywords ---
+    # to build deafult list in control bar
     DEFAULT_CRITICAL = [lbl for lbl in ALL_LABELS if any(s in lbl.lower() for s in _critical_substrings)]
     DEFAULT_WARNING = [lbl for lbl in ALL_LABELS if any(s in lbl.lower() for s in _warning_substrings)]
     DEFAULT_INFO = [lbl for lbl in ALL_LABELS if any(s in lbl.lower() for s in _info_substrings)]
@@ -178,13 +175,12 @@ initialize_session_state()
 LOG_FILE = st.session_state.log_file
 
 
-# --- 4. HELPER FUNCTIONS ---
+# helper functions
 
 @st.dialog("🚨 Critical Alert Detected!", dismissible=False)
 def show_critical_alert_dialog(alert):
     """
     Displays a modal dialog for critical (Tier 3) alerts.
-    This function is called on *every* rerun as long as the alert is active.
     """
     st.session_state.critical_dialog_open = True
     
@@ -198,12 +194,13 @@ def show_critical_alert_dialog(alert):
     st.warning("This is a critical alert and requires your attention.")
 
     if st.button("Acknowledge", use_container_width=True, type="primary"):
-        # 1. Acknowledge the alert
+        
+        # ack
         new_ids = st.session_state.acknowledged_ids.copy()
         new_ids.add(alert['id'])
         st.session_state.acknowledged_ids = new_ids
         
-        # 2. Stop the microphone pipeline if it's running
+        # 2. stop microphone (for demo only)
         if st.session_state.pipeline_running:
             if st.session_state.stop_event:
                 st.session_state.stop_event.set()
@@ -211,14 +208,13 @@ def show_critical_alert_dialog(alert):
             st.success("Alert acknowledgment, stop microphone.")
             time.sleep(0.5) 
         
-        # 3. Close the dialog and rerun
+        # close dialogue
         st.session_state.critical_dialog_open = False
         st.rerun()
 
 def parse_prediction_to_alert(alert_data):
     """
-    Parses a raw prediction dictionary from the log file into a formatted alert object.
-    Applies tier logic, confidence thresholds, and profile (DND/Sleep) filters.
+    Parses a raw prediction dictionary from the log file into a formatted alert object. Applies tier logic, confidence thresholds, and profile (DND/Sleep) filters.
     """
     pred = alert_data.get("Fused")
     if not pred:
@@ -256,8 +252,7 @@ def parse_prediction_to_alert(alert_data):
 
 def display_alert_card(alert):
     """
-    Renders a single alert card in the UI.
-    This function handles the visual state for acknowledged vs. unacknowledged alerts.
+    Renders a single alert card in the UI, acknoledge vs unacknowledge UI
     """
     icon = "ℹ️"
     if alert['tier'] == 3: 
@@ -299,7 +294,7 @@ def display_alert_card(alert):
                     st.rerun()
 
 
-# --- 5. SIDEBAR CONTROLS ---
+# side bar buttons and controls
 st.sidebar.title("Microphone Status")
 if st.session_state.pipeline_running:
     st.sidebar.markdown("**Microphone Status:** 🟢 Running")
@@ -365,7 +360,7 @@ uploaded_file = st.sidebar.file_uploader(
 )
 
 
-# --- 6. MAIN PAGE ---
+# main page/UI
 st.title("SilentSignals: Real-Time Event Based Alerts")
 
 tab_dashboard, tab_finetune = st.tabs(["🚨 Live Dashboard", "🔬 Submit for Finetuning"])
@@ -463,7 +458,7 @@ with tab_dashboard:
                 st.caption(f"({ast_score:.1%} Confidence)")
 
     with col_alerts:
-        # --- 7. ALERT PROCESSING ---
+        # alert processing
         try:
             with open(LOG_FILE, 'r') as f:
                 f.seek(st.session_state.file_pos)
@@ -499,7 +494,7 @@ with tab_dashboard:
                 
                 newly_created_alerts.append(new_alert)
 
-        # --- 7a. Show Persistent Critical Dialog ---
+        # persistent critical 
         alert_to_show = None
         for alert in st.session_state.alerts:
             if alert['tier'] == 3 and alert['id'] not in st.session_state.acknowledged_ids:
@@ -509,7 +504,7 @@ with tab_dashboard:
         if alert_to_show and not st.session_state.processing_file:
             show_critical_alert_dialog(alert_to_show)
 
-        # --- 7b. Show Toasts for *new* non-critical alerts ---
+        # toast on top right for less critical (warning)
         newly_created_alerts.sort(key=lambda x: x.get('tier', 0))
         for alert in newly_created_alerts:
             if alert['id'] in st.session_state.acknowledged_ids or alert['tier'] == 3:
@@ -518,7 +513,7 @@ with tab_dashboard:
             if alert['tier'] == 2:
                 st.toast(f"⚠️ Warning: {alert['type']} detected!", icon="⚠️")
         
-        # --- 8. TIERED ALERT DISPLAY ---
+        # tiered alert display
         all_active = st.session_state.alerts
         all_active.sort(key=lambda x: x.get('time', 0), reverse=True)
         st.subheader(f"🚨 Active Alerts ({len(all_active)})")
@@ -575,7 +570,7 @@ with tab_finetune:
             else:
                 st.success("Thank you! The audio clip will proceed to finetune with the new labels.")
 
-# --- 9. AUTO-REFRESH LOOP ---
+# auto refresh loop (cannot be too fast due to streamlit constraints)
 if st.session_state.pipeline_running and not st.session_state.get('critical_dialog_open', False):
     try:
         time.sleep(1)
