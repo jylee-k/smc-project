@@ -1,5 +1,8 @@
 # smc-project
 This project involves sound event detection and model fusion (PANNs / VGGish / AST).
+
+Due to Canvas file size limit, data files are not included in the code submission. However, it can be downloaded via ```scripts/download_audioset_wavs.py```.
+
 ## environment setup
 ```bash
 conda create -n sound_env python=3.9 -y
